@@ -1,0 +1,13 @@
+{
+  "source": "yfinance",
+  "n": 120,
+  "start": "2014-01-01",
+  "days": 2520,
+  "frequency": "QE",
+  "lookback": 756,
+  "estimator": "ledoit_wolf",
+  "risk_aversion": 2.0,
+  "max_weight": null,
+  "cost_bps": 10.0,
+  "out": "/Users/jasonpereira/Jason/Projects/gpu-portfolio-optimization-engine/benchmarks/results"
+}

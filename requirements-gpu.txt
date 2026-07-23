@@ -1,0 +1,17 @@
+# GPU stack. Requires a CUDA-capable NVIDIA GPU and the NVIDIA package index:
+#
+#   pip install --extra-index-url=https://pypi.nvidia.com -r requirements-gpu.txt
+#
+# Swap cu13 -> cu12 to match your CUDA major version (`nvidia-smi` reports it).
+#
+# Versions are pinned exactly, not floated. cuOpt's Python module layout changed
+# between the 25.12, 26.02 and 26.04+ releases (LP/QP/MILP was reorganized into
+# separate "Convex Optimization" and "MIP" sections). optimizer/cuopt_compat.py
+# absorbs the differences it can, but an unpinned upgrade mid-project will
+# invalidate benchmark numbers you have already recorded.
+#
+# Verified against: cuOpt 26.02, RAPIDS 26.06.
+cudf-cu13==26.6.*
+cuml-cu13==26.6.*
+cupy-cuda13x>=13.0
+cuopt-cu13==26.2.*
