@@ -1,0 +1,14 @@
+# CPU baseline + everything that runs without a GPU.
+# GPU packages are in requirements-gpu.txt (they need a CUDA host and the
+# NVIDIA package index, so they are deliberately not installable from here).
+numpy>=2.0,<3
+pandas>=2.2,<3
+scipy>=1.13
+cvxpy>=1.5
+pyarrow>=16
+yfinance>=0.2.40
+requests>=2.31
+lxml>=5.0            # pandas.read_html backend for the S&P 500 constituent table
+matplotlib>=3.8
+streamlit>=1.35
+pytest>=8.0
