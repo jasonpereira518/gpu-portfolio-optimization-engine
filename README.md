@@ -15,16 +15,16 @@ reference.
 
 ## Status
 
-| Component | State |
-|---|---|
-| Data pipeline (yfinance + synthetic generator, Parquet cache, quality checks) | Complete, tested |
-| CPU baseline (returns, rolling features, 3 covariance estimators) | Complete, tested |
-| CPU optimizer (CVXPY QP: box, budget, turnover, group caps) | Complete, tested |
-| Backtest engine (rolling rebalance, costs, no-lookahead enforcement) | Complete, tested |
-| Benchmark harness (per-stage, warm-up separated, variance reported) | Complete |
-| GPU pipeline (cuDF/CuPy/cuML) | Written, **not yet executed** — no CUDA host available |
-| cuOpt QP + MIP layer | Written against the verified 26.02 API, **not yet executed** |
-| NIM explainer (stretch) | Written with an offline fallback, **not yet executed** |
+| Component                                                                     | State                                                        |
+| ----------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| Data pipeline (yfinance + synthetic generator, Parquet cache, quality checks) | Complete, tested                                             |
+| CPU baseline (returns, rolling features, 3 covariance estimators)             | Complete, tested                                             |
+| CPU optimizer (CVXPY QP: box, budget, turnover, group caps)                   | Complete, tested                                             |
+| Backtest engine (rolling rebalance, costs, no-lookahead enforcement)          | Complete, tested                                             |
+| Benchmark harness (per-stage, warm-up separated, variance reported)           | Complete                                                     |
+| GPU pipeline (cuDF/CuPy/cuML)                                                 | Written, **not yet executed** — no CUDA host available       |
+| cuOpt QP + MIP layer                                                          | Written against the verified 26.02 API, **not yet executed** |
+| NIM explainer (stretch)                                                       | Written with an offline fallback, **not yet executed**       |
 
 **There are no speedup numbers in this README yet, and there will not be until
 the GPU code has actually run.** Everything above marked "not yet executed" is
@@ -140,7 +140,7 @@ A lookahead bug does not crash; it just produces a beautiful equity curve. The
 backtest slices `prices.loc[:date]` before the risk model sees anything, and
 [`tests/test_backtest.py`](tests/test_backtest.py) both records the last date
 every risk model was handed (asserting it never exceeds its own rebalance date)
-*and* runs a deliberately cheating variant to confirm that foresight would in
+_and_ runs a deliberately cheating variant to confirm that foresight would in
 fact show up — so the test cannot pass by being vacuous.
 
 ---
@@ -162,7 +162,7 @@ GPU benchmarks are unintentionally inflated:
   crossover point can be located per stage rather than in aggregate.
 
 Universe sizes 50 / 500 / 3,000 over ~10 years of daily data. At n = 50 the GPU
-is expected to *lose* to the CPU: kernel launch and transfer overhead dominate a
+is expected to _lose_ to the CPU: kernel launch and transfer overhead dominate a
 problem that small. That crossover is a finding, not an embarrassment, and it
 gets reported.
 
@@ -244,7 +244,7 @@ there, and it raises a message naming the docs page rather than an
 
 Stated here rather than discovered by a reader:
 
-- **Survivorship bias.** The yfinance path uses the *current* S&P 500 membership,
+- **Survivorship bias.** The yfinance path uses the _current_ S&P 500 membership,
   so the backtest never holds a company that was delisted or acquired. This
   inflates returns. Fixing it properly needs point-in-time constituent data
   (CRSP/Compustat), which is not freely available.
@@ -289,6 +289,6 @@ tests/         test_data.py, test_risk_models.py, test_optimizer.py, test_backte
 - [NVIDIA cuOpt docs](https://docs.nvidia.com/cuopt/user-guide/latest/) · [github.com/NVIDIA/cuopt](https://github.com/NVIDIA/cuopt)
 - [RAPIDS cuDF](https://docs.rapids.ai/api/cudf/stable/) — pandas-compatible GPU dataframes.
 - Ledoit, O. & Wolf, M. (2004), "A well-conditioned estimator for large-dimensional
-  covariance matrices," *Journal of Multivariate Analysis* 88(2).
+  covariance matrices," _Journal of Multivariate Analysis_ 88(2).
 - DeMiguel, V., Garlappi, L. & Uppal, R. (2009), "Optimal Versus Naive
-  Diversification," *Review of Financial Studies* 22(5).
+  Diversification," _Review of Financial Studies_ 22(5).
