@@ -6,6 +6,12 @@ resulting weights earn returns strictly after t. That invariant is enforced
 structurally (by slicing with ``prices.loc[:date]`` before the risk model ever
 sees the data) and asserted in ``tests/test_backtest.py``, because a lookahead
 bug does not crash — it just produces a beautiful equity curve.
+
+The second property is that every result is **scored over the period it was
+invested**: statistics start at the first rebalance, not at the first price
+row. Scoring the lookback period — all zero returns, before anything is held —
+deflates a strategy's annualized return and Sharpe, and a benchmark scored from
+day one is then being compared over a different period altogether.
 """
 
 from __future__ import annotations
@@ -17,7 +23,7 @@ from typing import Callable
 import numpy as np
 import pandas as pd
 
-from optimizer.spec import PortfolioSpec, Solution
+from optimizer.spec import PortfolioSpec, Solution, objective_value
 from pipeline.risk_model import TRADING_DAYS, RiskModel
 
 log = logging.getLogger(__name__)
@@ -40,6 +46,7 @@ class RebalanceRecord:
 
 @dataclass
 class BacktestResult:
+    # All three series start at the first rebalance (see module docstring).
     equity: pd.Series  # cumulative growth of 1.0, net of costs
     gross_equity: pd.Series  # same, ignoring transaction costs
     returns: pd.Series  # daily net portfolio returns
@@ -164,10 +171,16 @@ def run_backtest(
             comparison sensitive to any single divergent solve.
 
     Returns:
-        BacktestResult with net and gross equity curves and per-rebalance records.
+        BacktestResult with net and gross equity curves and per-rebalance
+        records, scored from the first successful rebalance onward.
+
+    Timing convention: a rebalance dated t trades at t's close. The day's
+    return (close t-1 to close t) is therefore earned by the weights held going
+    into t, and the new weights earn from t+1. Costs are charged on the value
+    the portfolio has when it trades, i.e. after that day's return.
     """
     base_spec = spec or PortfolioSpec()
-    returns = prices.pct_change().fillna(0.0)
+    daily_returns = prices.pct_change().fillna(0.0).to_numpy()
     dates = pd.DatetimeIndex(prices.index)
 
     marks = rebalance_dates(dates, frequency, lookback_days)
@@ -191,7 +204,21 @@ def run_backtest(
 
     next_mark = 0
     for day_idx, date in enumerate(dates):
-        # --- rebalance decision, using only data up to and including `date` ---
+        # --- P&L: the weights held into today were set at or before yesterday's close ---
+        day_return = 0.0
+        if day_idx > 0 and current.any():
+            day_return = float(daily_returns[day_idx] @ current)
+
+            # Weights drift with prices between rebalances; not renormalizing
+            # would silently model a daily rebalance back to target.
+            grown = current * (1.0 + daily_returns[day_idx])
+            total = grown.sum()
+            if total > 0:
+                current = grown / total
+        net_returns[day_idx] = day_return
+        gross_returns[day_idx] = day_return
+
+        # --- rebalance at today's close, using only data up to and including `date` ---
         if next_mark < len(marks) and date == marks[next_mark]:
             trailing = prices.loc[:date].iloc[-lookback_days:]
             try:
@@ -223,7 +250,7 @@ def run_backtest(
 
             turnover = float(np.abs(target - current).sum())
             cost = turnover * cost_rate
-            net_returns[day_idx] -= cost
+            net_returns[day_idx] = (1.0 + day_return) * (1.0 - cost) - 1.0
 
             records.append(
                 RebalanceRecord(
@@ -235,21 +262,13 @@ def run_backtest(
             current = target
             next_mark += 1
 
-        # --- P&L: today's weights were set strictly before today's return ---
-        elif day_idx > 0 and current.any():
-            day_return = float(returns.iloc[day_idx].to_numpy() @ current)
-            net_returns[day_idx] += day_return
-            gross_returns[day_idx] += day_return
+    if not records:
+        raise ValueError("every rebalance failed; there is no invested period to score")
 
-            # Weights drift with prices between rebalances; not renormalizing
-            # would silently model a daily rebalance back to target.
-            grown = current * (1.0 + returns.iloc[day_idx].to_numpy())
-            total = grown.sum()
-            if total > 0:
-                current = grown / total
-
-    net = pd.Series(net_returns, index=dates, name="net_return")
-    gross = pd.Series(gross_returns, index=dates, name="gross_return")
+    # Score from the first rebalance: before it the portfolio holds nothing.
+    start = records[0].date
+    net = pd.Series(net_returns, index=dates, name="net_return").loc[start:]
+    gross = pd.Series(gross_returns, index=dates, name="gross_return").loc[start:]
 
     return BacktestResult(
         equity=(1.0 + net).cumprod(),
@@ -260,25 +279,58 @@ def run_backtest(
     )
 
 
-def equal_weight_benchmark(prices: pd.DataFrame, label: str = "equal-weight") -> BacktestResult:
-    """1/N buy-and-hold, the benchmark mean-variance actually has to beat.
+def equal_weight_solver(model: RiskModel, spec: PortfolioSpec) -> Solution:
+    """1/N across whatever the risk model marks investable at this rebalance."""
+    weights = np.full(model.n_assets, 1.0 / model.n_assets)
+    return Solution(
+        weights=weights,
+        objective=objective_value(weights, model.cov, model.exp_returns, spec.risk_aversion),
+        solve_time=0.0,
+        build_time=0.0,
+        status="equal_weight",
+        backend="none",
+        solver="1/N",
+    )
+
+
+def equal_weight_benchmark(
+    prices: pd.DataFrame,
+    risk_model_fn: RiskModelFn,
+    frequency: str = "ME",
+    lookback_days: int = 756,
+    transaction_cost_bps: float = 10.0,
+    label: str = "equal-weight 1/N",
+) -> BacktestResult:
+    """1/N, the benchmark mean-variance actually has to beat.
 
     Included because "the optimizer made money" is not a result on its own —
     equal weighting is a famously hard baseline for mean-variance to beat out
     of sample, and omitting it would overstate the strategy.
+
+    It runs through ``run_backtest`` so that it shares everything with the
+    strategy except the weights: the rebalance dates, the investable universe
+    (pass the strategy's own ``risk_model_fn``), the cost model, the drift
+    between rebalances and the scoring window.
     """
-    returns = prices.pct_change().fillna(0.0)
-    n = prices.shape[1]
-    port = returns.mean(axis=1) if n else returns.sum(axis=1)
-    return BacktestResult(
-        equity=(1.0 + port).cumprod(),
-        gross_equity=(1.0 + port).cumprod(),
-        returns=port.rename("net_return"),
-        rebalances=[],
-        label=label,
+    return run_backtest(
+        prices, risk_model_fn, equal_weight_solver,
+        PortfolioSpec(risk_aversion=0.0, max_weight=1.0),
+        frequency=frequency, lookback_days=lookback_days,
+        transaction_cost_bps=transaction_cost_bps, label=label,
     )
 
 
 def compare_results(results: list[BacktestResult]) -> pd.DataFrame:
-    """Side-by-side summary table — the solution-quality half of the benchmark."""
+    """Side-by-side summary table — the solution-quality half of the benchmark.
+
+    Refuses results scored over different dates: annualized statistics from
+    two different periods are not a comparison.
+    """
+    reference = results[0].returns.index
+    if any(not r.returns.index.equals(reference) for r in results[1:]):
+        spans = ", ".join(
+            f"{r.label or i}: {r.returns.index[0].date()}..{r.returns.index[-1].date()}"
+            for i, r in enumerate(results)
+        )
+        raise ValueError(f"results cover different windows ({spans}); align them first")
     return pd.DataFrame({r.label or f"run{i}": r.summary() for i, r in enumerate(results)}).T

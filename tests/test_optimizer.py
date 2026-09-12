@@ -169,6 +169,29 @@ def test_cuopt_matches_cvxpy_objective(model):
 
 
 @requires_cuopt
+@pytest.mark.parametrize("side_constraint", ["turnover", "group_caps"])
+def test_cuopt_matches_cvxpy_objective_with_side_constraints(model, side_constraint):
+    """Turnover adds auxiliary variables (the padded-Q path); group caps add rows."""
+    from optimizer.mean_variance_cuopt import solve_mean_variance_cuopt
+
+    n = model.n_assets
+    if side_constraint == "turnover":
+        spec = PortfolioSpec(risk_aversion=3.0, max_weight=0.10, turnover_budget=0.15,
+                             w_prev=np.full(n, 1.0 / n))
+    else:
+        labels = ["even" if i % 2 == 0 else "odd" for i in range(n)]
+        spec = PortfolioSpec(risk_aversion=3.0, max_weight=0.10, group_labels=labels,
+                             group_max_weight=0.55)
+    cpu = solve_mean_variance_cpu(model, spec)
+    gpu = solve_mean_variance_cuopt(model, spec)
+
+    cov, mu = model.nearest_psd(), model.exp_returns
+    assert abs(objective_value(cpu.weights, cov, mu, spec.risk_aversion)
+               - objective_value(gpu.weights, cov, mu, spec.risk_aversion)) < 1e-8
+    assert gpu.check(spec) == []
+
+
+@requires_cuopt
 def test_cuopt_matches_closed_form_min_variance(model):
     from optimizer.mean_variance_cuopt import solve_mean_variance_cuopt
 

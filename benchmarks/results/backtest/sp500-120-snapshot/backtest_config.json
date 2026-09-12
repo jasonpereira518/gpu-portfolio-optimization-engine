@@ -1,0 +1,15 @@
+{
+  "frequency": "QE",
+  "lookback": 756,
+  "estimator": "ledoit_wolf",
+  "risk_aversion": 2.0,
+  "max_weight": null,
+  "cost_bps": 10.0,
+  "prices_file": "prices_120_e94b71d8c6c5.parquet",
+  "prices_sha256": "50aa4b6d9776b3dbfddefa89908868463f0eabd124fcd0bd7406b4cd384e96ba",
+  "universe": "snapshot-120",
+  "n_assets": 120,
+  "price_rows": "2014-01-02..2026-07-22",
+  "scored_window": "2017-03-31..2026-07-22",
+  "max_weight_applied": 0.06666666666666667
+}

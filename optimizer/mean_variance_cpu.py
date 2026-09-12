@@ -18,11 +18,19 @@ from pipeline.risk_model import RiskModel
 def solve_mean_variance_cpu(
     risk_model: RiskModel,
     spec: PortfolioSpec | None = None,
-    solver: str | None = None,
+    solver: str | None = "CLARABEL",
     psd_clip: bool = True,
     verbose: bool = False,
 ) -> Solution:
     """Solve the mean-variance QP with CVXPY.
+
+    ``solver`` is pinned rather than left to CVXPY's default (OSQP at the time
+    of writing), for three reasons: the oracle must not change when CVXPY
+    changes its default; Clarabel is an interior-point method, the same family
+    as cuOpt's barrier QP solver, with the same 1e-8 default tolerances; and it
+    is the faster CPU choice here (about 3x OSQP at n=500), so the baseline
+    every GPU timing is measured against is the stronger one. Accuracy was not
+    the issue — polished OSQP agreed with Clarabel to about 1e-9 in objective.
 
     ``psd_clip`` eigenvalue-clips the covariance first. CVXPY otherwise
     rejects a numerically-indefinite matrix in ``quad_form`` with a DCP error,

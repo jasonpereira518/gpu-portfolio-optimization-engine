@@ -2,9 +2,9 @@
 # GPU packages are in requirements-gpu.txt (they need a CUDA host and the
 # NVIDIA package index, so they are deliberately not installable from here).
 numpy>=2.0,<3
-pandas>=2.2,<3
+pandas>=2.2,<4       # suite verified on pandas 3.0.3; the GPU stack may pin 2.x
 scipy>=1.13
-cvxpy>=1.5
+cvxpy>=1.5           # ships Clarabel, the pinned CPU reference solver
 pyarrow>=16
 yfinance>=0.2.40
 requests>=2.31

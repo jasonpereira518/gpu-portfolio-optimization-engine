@@ -2,8 +2,11 @@
 
     streamlit run dashboard/app.py
 
-Runs on CPU-only hosts and labels the backend it actually used, so a screenshot
-of this page can never be mistaken for a GPU result when it was not one.
+Every solve on this page runs the CPU baseline (pandas + CVXPY), on any host.
+Labels are taken from the backend fields of the objects each solve actually
+returned — never from which GPU libraries happen to be importable — so a
+screenshot of this page can never be mistaken for a GPU result. GPU numbers
+come from the benchmark suite, shown at the bottom.
 """
 
 from __future__ import annotations
@@ -33,16 +36,15 @@ st.title("GPU Portfolio & Risk Decision Engine")
 # --------------------------------------------------------------------------
 
 gpu_data, gpu_solver = rapids_available(), cuopt_available()
-cols = st.columns(3)
-cols[0].metric("RAPIDS (cuDF/cuML)", "available" if gpu_data else "not available")
-cols[1].metric("cuOpt", "available" if gpu_solver else "not available")
-cols[2].metric("Active backend", "GPU" if (gpu_data and gpu_solver) else "CPU")
+cols = st.columns(2)
+cols[0].metric("cuDF/cuML on this host", "installed" if gpu_data else "not installed")
+cols[1].metric("cuOpt on this host", "installed" if gpu_solver else "not installed")
 
-if not (gpu_data and gpu_solver):
-    st.info(
-        "No CUDA GPU detected on this host, so everything below is the CPU baseline "
-        "(pandas + CVXPY). Numbers on this page are therefore not a speedup claim."
-    )
+st.info(
+    "The solves on this page run the CPU baseline (pandas + CVXPY) on every host; "
+    "the label under each result names the backend that produced it. Numbers here "
+    "are not a speedup claim — GPU timings come from the benchmark suite below."
+)
 
 # --------------------------------------------------------------------------
 # Controls
@@ -90,6 +92,9 @@ with st.spinner("Solving..."):
     model = risk_fn(prices.iloc[-lookback:])
     solution = solve_mean_variance_cpu(model, spec)
 
+# Named from what ran, e.g. "cpu risk model + cvxpy/CLARABEL".
+ran_on = f"{model.backend} risk model + {solution.backend}/{solution.solver}"
+
 cov = model.nearest_psd()
 port_vol = float(np.sqrt(solution.weights @ cov @ solution.weights))
 port_ret = float(model.exp_returns @ solution.weights)
@@ -105,7 +110,7 @@ violations = solution.check(spec)
 if violations:
     st.error("Constraint violations: " + "; ".join(violations))
 else:
-    st.success(f"All constraints satisfied ({solution.solver}, status={solution.status})")
+    st.success(f"All constraints satisfied ({ran_on}, status={solution.status})")
 
 top = (
     pd.Series(solution.weights, index=model.tickers)
@@ -122,13 +127,11 @@ st.header("Rolling backtest")
 
 if st.button("Run backtest", type="primary"):
     with st.spinner("Backtesting..."):
-        strategy = run_backtest(
-            prices, risk_fn, solve_mean_variance_cpu, spec,
-            frequency=frequency, lookback_days=lookback,
-            transaction_cost_bps=cost_bps,
-            label="mean-variance (CPU)" if not (gpu_data and gpu_solver) else "mean-variance (GPU)",
-        )
-        benchmark = equal_weight_benchmark(prices, label="equal-weight 1/N")
+        schedule = {"frequency": frequency, "lookback_days": lookback,
+                    "transaction_cost_bps": cost_bps}
+        strategy = run_backtest(prices, risk_fn, solve_mean_variance_cpu, spec,
+                                label=f"mean-variance ({ran_on})", **schedule)
+        benchmark = equal_weight_benchmark(prices, risk_fn, **schedule)
 
     st.line_chart(pd.DataFrame({r.label: r.equity for r in (strategy, benchmark)}))
     st.dataframe(compare_results([strategy, benchmark]).style.format("{:.4f}"))
