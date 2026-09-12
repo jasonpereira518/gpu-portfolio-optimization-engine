@@ -133,8 +133,19 @@ def environment_metadata() -> dict[str, str]:
             capture_output=True, text=True, timeout=10, check=True,
         )
         meta["gpu"] = gpu.stdout.strip()
+        # Clocks and link state at the start of the run: desktop GPUs boost
+        # opportunistically, so a number means more next to the clocks it ran
+        # at. Fields a platform does not expose (e.g. under WSL2) read "[N/A]".
+        state = subprocess.run(
+            ["nvidia-smi",
+             "--query-gpu=pstate,clocks.sm,clocks.max.sm,clocks.mem,power.limit,"
+             "pcie.link.gen.current,pcie.link.width.current",
+             "--format=csv"],
+            capture_output=True, text=True, timeout=10, check=True,
+        )
+        meta["gpu_state"] = " | ".join(state.stdout.strip().splitlines())
     except Exception:
-        meta["gpu"] = "none detected"
+        meta.setdefault("gpu", "none detected")
 
     return meta
 
@@ -155,5 +166,10 @@ def speedup_table(timings: list[Timing]) -> "Any":
         index=["stage", "n_assets", "n_days"], columns="backend", values="median_s"
     )
     if "cpu" in pivot.columns and "gpu" in pivot.columns:
+        # The CPU solve already goes through CVXPY, so it is also the baseline
+        # for the GPU solve made through CVXPY ("solve_cvxpy").
+        for stage, n_assets, n_days in pivot.index:
+            if stage == "solve_cvxpy" and ("solve", n_assets, n_days) in pivot.index:
+                pivot.loc[(stage, n_assets, n_days), "cpu"] = pivot.loc[("solve", n_assets, n_days), "cpu"]
         pivot["speedup"] = pivot["cpu"] / pivot["gpu"]
     return pivot.reset_index()

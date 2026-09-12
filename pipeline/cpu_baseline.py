@@ -9,7 +9,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from pipeline.risk_model import TRADING_DAYS, RiskModel
+from pipeline.risk_model import PSD_BY_CONSTRUCTION, TRADING_DAYS, RiskModel
 
 
 # --------------------------------------------------------------------------
@@ -165,4 +165,5 @@ def build_risk_model(
         tickers=list(returns.columns),
         estimator=estimator,
         backend="cpu",
+        psd_by_construction=estimator in PSD_BY_CONSTRUCTION,
     )
