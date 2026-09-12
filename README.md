@@ -302,10 +302,13 @@ pipeline/      risk_model.py (shared contract), cpu_baseline.py, gpu_pipeline.py
 optimizer/     spec.py (shared contract), mean_variance_cpu.py, mean_variance_cuopt.py,
                turnover_mip_cuopt.py, cuopt_compat.py (version shim)
 backtest/      engine.py, run_backtest.py
-benchmarks/    harness.py, run_benchmarks.py, results/
+benchmarks/    harness.py, run_benchmarks.py, render_tables.py (docs tables from results/), results/
 explainer/     nim_explainer.py
 dashboard/     app.py
-tests/         test_data.py, test_risk_models.py, test_optimizer.py, test_backtest.py
+notebooks/     colab_gpu_runner.ipynb (second GPU data point on a free T4)
+docs/          case-study.md, setup-wsl2.md (Windows 11 + WSL2 GPU bring-up)
+tests/         test_data.py, test_risk_models.py, test_optimizer.py, test_backtest.py,
+               test_cuopt_formulation.py + fake_cuopt.py, test_benchmarks.py, test_render_tables.py
 ```
 
 ---
