@@ -20,7 +20,7 @@ import importlib
 
 import numpy as np
 
-from pipeline.risk_model import TRADING_DAYS, RiskModel
+from pipeline.risk_model import PSD_BY_CONSTRUCTION, TRADING_DAYS, RiskModel
 
 
 class GpuUnavailable(RuntimeError):
@@ -35,11 +35,10 @@ def load_rapids():
         cupy = importlib.import_module("cupy")
     except ImportError as exc:  # pragma: no cover - exercised only off-GPU
         raise GpuUnavailable(
-            "RAPIDS (cudf/cupy) is not installed. This module only runs on a CUDA "
-            "machine. Install with:\n"
-            "  pip install --extra-index-url=https://pypi.nvidia.com \\\n"
-            "      cudf-cu13==26.6.* cuml-cu13==26.6.*\n"
-            "On a CPU-only host, use pipeline.cpu_baseline instead."
+            "cuDF/CuPy (NVIDIA CUDA-X Data Science, formerly RAPIDS) is not installed. "
+            "This module only runs on a CUDA machine. Install the pinned GPU stack with:\n"
+            "  pip install --extra-index-url=https://pypi.nvidia.com -r requirements-gpu.txt\n"
+            "See docs/setup-wsl2.md. On a CPU-only host, use pipeline.cpu_baseline instead."
         ) from exc
     try:
         cuml = importlib.import_module("cuml")
@@ -221,4 +220,5 @@ def build_risk_model_gpu(
         tickers=[str(c) for c in returns_gdf.columns],
         estimator=estimator,
         backend="gpu",
+        psd_by_construction=estimator in PSD_BY_CONSTRUCTION,
     )

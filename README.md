@@ -215,16 +215,20 @@ test that gets ignored.
 
 ## Reproducing the GPU results
 
-On a rented L4 / A10 / L40S (an H100 is unnecessary at this problem size):
-
-```bash
-docker build -t gpu-portfolio-engine . && docker run --gpus all -it --rm -v $(pwd):/workspace gpu-portfolio-engine
-```
-
-Or without Docker:
+Any CUDA GPU from Volta onward with at least 16 GB of system RAM (cuOpt's
+minimum). On Windows with a GeForce RTX card, follow
+[`docs/setup-wsl2.md`](docs/setup-wsl2.md), which also covers what WSL2 can and
+cannot measure. The GPU stack is pinned to a single release (cuDF, cuML and
+cuOpt 26.08) in `requirements-gpu.txt`:
 
 ```bash
 pip install --extra-index-url=https://pypi.nvidia.com -r requirements-gpu.txt
+```
+
+Or in the container (base image pinned by digest):
+
+```bash
+docker build -t gpu-portfolio-engine . && docker run --gpus all -it --rm -v $(pwd):/workspace gpu-portfolio-engine
 ```
 
 Then, **in this order** — parity before speed, always:
