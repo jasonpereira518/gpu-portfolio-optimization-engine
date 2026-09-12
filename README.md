@@ -31,7 +31,17 @@ the GPU code has actually run.** Everything above marked "not yet executed" is
 code written against NVIDIA's published API and guarded so that it fails with an
 actionable message rather than silently falling back to CPU. Section
 "[Reproducing the GPU results](#reproducing-the-gpu-results)" is the exact
-sequence to fill in the missing column on a rented L4/A10.
+sequence to fill in the missing column.
+
+### GPU results
+
+Generated from the committed files in `benchmarks/results/` by
+`python -m benchmarks.render_tables` — never typed — and only after the
+parity checks pass on the same machine.
+
+<!-- BEGIN GENERATED: gpu-speedup -->
+_No GPU results committed yet — see [docs/setup-wsl2.md](docs/setup-wsl2.md). This table is generated from `benchmarks/results/`, so it fills in when they are._
+<!-- END GENERATED: gpu-speedup -->
 
 ---
 

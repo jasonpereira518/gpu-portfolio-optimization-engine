@@ -182,6 +182,7 @@ scored from the first rebalance, over identical dates. Two universes:
 - **Synthetic:** 150 assets from the k-factor generator (2014-01-01 to
   2023-08-29, scored from 2016-12-30).
 
+<!-- BEGIN GENERATED: backtest-summary -->
 | | MV (real) | 1/N (real) | MV (synthetic) | 1/N (synthetic) |
 |---|---|---|---|---|
 | annualized return | 23.6% | 16.4% | 24.5% | 16.0% |
@@ -189,6 +190,10 @@ scored from the first rebalance, over identical dates. Two universes:
 | Sharpe | 0.93 | 0.90 | 1.04 | 0.92 |
 | max drawdown | −36.9% | −36.5% | −27.5% | −21.8% |
 | avg turnover per rebalance | 57.9% | 9.9% | 58.3% | 17.4% |
+<!-- END GENERATED: backtest-summary -->
+
+(Generated from the committed `backtest_summary.csv` files by
+`python -m benchmarks.render_tables`.)
 
 On real data the optimizer earns about 7 points more return for about 8 points
 more volatility, and ends up level with 1/N on Sharpe. The 0.03 gap is noise:
