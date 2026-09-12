@@ -241,7 +241,11 @@ class Problem:
             constraints=LinearConstraint(a, lower, upper) if self.constraints else None,
             integrality=[1 if v.vtype == VType.INTEGER else 0 for v in self.vars],
             bounds=Bounds([v.lb for v in self.vars], [v.ub for v in self.vars]),
-            options={"time_limit": time_limit, "mip_rel_gap": 0.0},
+            # Presolve off: on a 40-name lot-rounding model with transaction
+            # costs, HiGHS's presolve (as bundled with scipy 1.18) returned an
+            # answer 2% worse than a known feasible point and called it
+            # optimal. A reference has to be right before it is fast.
+            options={"time_limit": time_limit, "mip_rel_gap": 0.0, "presolve": False},
         )
         self.SolveTime = time.perf_counter() - t0
 

@@ -18,7 +18,11 @@ import itertools
 import numpy as np
 import pytest
 
+from data.universe import synthetic_prices
+from optimizer.mean_variance_cpu import solve_mean_variance_cpu
+from optimizer.spec import PortfolioSpec
 from optimizer.turnover_mip_cuopt import round_lots_greedy, solve_lot_rounding_cuopt
+from pipeline.cpu_baseline import build_risk_model
 from tests.fake_cuopt import FAKE_API
 
 # Three assets whose answers can be worked out with a pencil: one lot of each
@@ -57,6 +61,18 @@ def _brute_force(target, prices, value, lot_size, allow_cash, prev_shares=None,
 def _objective(solution, value):
     """The MIP's objective re-evaluated from the returned holdings."""
     return solution.tracking_error + solution.transaction_cost / value
+
+
+@pytest.fixture(scope="module")
+def rebalance():
+    """A rebalance at the scale the MIP meets in practice: 40 names, a $1M book
+    held equal-weight in whole shares, and a turnover-capped QP target."""
+    prices = synthetic_prices(40, n_days=1260, seed=3).prices
+    w_prev = np.full(40, 1.0 / 40)
+    spec = PortfolioSpec(risk_aversion=2.0, max_weight=0.15, turnover_budget=0.25, w_prev=w_prev)
+    target = solve_mean_variance_cpu(build_risk_model(prices, estimator="ledoit_wolf"), spec).weights
+    last = prices.iloc[-1].to_numpy()
+    return target, last, np.floor(w_prev * 1e6 / last)
 
 
 # ---------------------------------------------------------------------------
@@ -141,6 +157,26 @@ def test_a_trade_limit_can_always_keep_the_current_book():
     assert solution.n_trades <= 1
     want = _brute_force(target, prices, VALUE, 1, True, prev_shares=prev_shares, max_trades=1)
     assert _objective(solution, VALUE) == pytest.approx(want, abs=1e-6)
+
+
+def test_a_realistic_per_share_fee_never_leaves_the_mip_worse_off_than_ignoring_it(rebalance):
+    """Ignoring costs is a feasible answer for the cost-aware model, so the
+    cost-aware answer can be no worse on tracking error plus cost — at a real
+    fee ($0.01 a share on a $1M book), not only the brute-force toy's. A cost
+    term priced in the wrong units fails this, and so did HiGHS with presolve
+    on, which is why the stand-in solves with presolve off."""
+    target, prices, prev_shares = rebalance
+    fee = 0.01
+
+    def with_fees(solution):
+        return solution.tracking_error + fee * np.abs(solution.shares - prev_shares).sum() / 1e6
+
+    blind = solve_lot_rounding_cuopt(target, prices, 1e6, prev_shares=prev_shares,
+                                     allow_cash=True, api=FAKE_API)
+    aware = solve_lot_rounding_cuopt(target, prices, 1e6, prev_shares=prev_shares, cost_per_share=fee,
+                                     allow_cash=True, api=FAKE_API)
+
+    assert with_fees(aware) <= with_fees(blind) + 1e-6  # HiGHS's default absolute MIP gap
 
 
 def test_a_mip_without_a_solution_raises_instead_of_returning_nan_holdings():
