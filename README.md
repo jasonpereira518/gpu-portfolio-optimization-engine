@@ -67,6 +67,19 @@ parity checks pass on the same machine.
 | solve_cvxpy | 3000 | 5.96 s | 4.77 s | 1.25× |
 <!-- END GENERATED: gpu-speedup -->
 
+### Lot rounding: MIP vs greedy
+
+Stage 2 rounds the stage-1 weights to whole lots. Each row rounds one QP target
+three ways and reports L1 tracking error to it, as a share of the book; the MIP
+columns add, in parentheses, their multiple of greedy's — below 1× the MIP
+wins. "Fully invested" is the MIP's default budget rule (realized weights sum
+to exactly 1); "cash allowed" is greedy's own rule (they sum to at most 1),
+under which greedy's answer is always feasible for the MIP.
+
+<!-- BEGIN GENERATED: lot-rounding -->
+_No lot-rounding results committed yet — run `benchmarks.run_lot_rounding` on a GPU host (see [docs/setup-wsl2.md](docs/setup-wsl2.md)). This table is generated from `benchmarks/results/`, so it fills in when they are._
+<!-- END GENERATED: lot-rounding -->
+
 ---
 
 ## Quick start (CPU, no GPU required)
