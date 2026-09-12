@@ -87,8 +87,8 @@ def solve_lot_rounding_cuopt(
         prob.addVariable(lb=0.0, ub=float(max_lots[i]), vtype=api.VType.INTEGER, name=f"n_{i}")
         for i in range(n)
     ]
-    # Objective coefficients are set once in setObjective below, never also via
-    # addVariable(obj=...) — cuOpt would add both, silently double-weighting.
+    # Objective coefficients are set only in setObjective below: cuOpt's
+    # setObjective zeroes any passed earlier as addVariable(obj=...).
     dev = [prob.addVariable(lb=0.0, ub=1.0, name=f"d_{i}") for i in range(n)]
 
     # d_i >= +/- (lot_weight_i * n_i - target_i)

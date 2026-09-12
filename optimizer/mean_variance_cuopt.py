@@ -3,29 +3,37 @@
 Solves exactly the ``PortfolioSpec`` that ``mean_variance_cpu`` solves, so the
 two are directly comparable on both objective value and weights.
 
-Model-construction notes (these are where the naive formulation breaks down at
-scale, and they are the actual engineering content of this file):
+Model-construction notes (these are where a naive formulation breaks down,
+and they are the actual engineering content of this file). Semantics are as
+read from NVIDIA/cuopt v26.08.00 ``linear_programming/problem.py``;
+``tests/test_cuopt_formulation.py`` pins the resulting model without a GPU.
 
-1.  **Linear term via ``obj=``, not an expression.** Chaining
-    ``expr = expr + mu_i * w_i`` over n variables builds n intermediate
-    expression objects and is quadratic in n — at 3,000 assets that dominates
-    the solve it is supposed to feed. The linear coefficient is instead set
-    per-variable at creation with ``addVariable(obj=...)``.
+1.  **The return term travels inside the objective expression.**
+    ``Problem.setObjective`` zeroes every linear objective coefficient before
+    applying the expression it is given, so coefficients passed earlier as
+    ``addVariable(obj=...)`` are silently discarded and the solve degrades to
+    minimum-variance — a portfolio that still looks entirely plausible.
 
-2.  **Budget constraint via ``LinearExpression``**, one object holding all n
-    coefficients, for the same reason.
+2.  **Linear terms as one ``LinearExpression``** holding all n coefficients
+    (budget, group caps, return term). Chaining ``expr = expr + mu_i * w_i``
+    builds n intermediate expressions, quadratic in n. Coefficients are Python
+    lists: ``QuadraticExpression + LinearExpression`` concatenates coefficient
+    lists with ``+``, which an ndarray would turn into elementwise addition.
 
-3.  **Quadratic term via the matrix form of ``QuadraticExpression``**, which
-    takes the covariance in one call rather than n^2 pairwise terms.
+3.  **Quadratic term as one sparse matrix covering every variable.** cuOpt adds
+    a matrix-form ``QuadraticExpression`` positionally onto a
+    NumVariables x NumVariables matrix, so when turnover auxiliaries exist the
+    covariance is zero-padded to cover them (the weights are added first). The
+    matrix is handed over as a scipy sparse matrix rather than nested Python
+    lists, which at n=3,000 would mean building 9M Python floats.
 
 4.  **Objective convention is probed, not assumed** — see
     ``cuopt_compat.quadratic_convention``.
 
-The dense n^2 matrix is the real scaling ceiling here: at n=3,000 the covariance
-is 9M entries, and cuOpt's Python layer wants it as nested lists. Model build
-time is therefore reported separately from solve time in every benchmark, since
-conflating them would credit the GPU solver with a Python-side cost (or blame
-it for one).
+The n^2 covariance is still the scaling ceiling: at n=3,000 it is 9M nonzeros
+however it is passed. Model build time is therefore reported separately from
+solve time in every benchmark, since conflating them would credit the GPU
+solver with a Python-side cost (or blame it for one).
 """
 
 from __future__ import annotations
@@ -33,8 +41,10 @@ from __future__ import annotations
 import time
 
 import numpy as np
+from scipy.sparse import coo_matrix
 
 from optimizer.cuopt_compat import (
+    CuOptApi,
     CuOptUnavailable,
     is_optimal,
     load_cuopt,
@@ -45,21 +55,27 @@ from optimizer.spec import PortfolioSpec, Solution, objective_value
 from pipeline.risk_model import RiskModel
 
 
-def build_mean_variance_problem(cov: np.ndarray, mu: np.ndarray, spec: PortfolioSpec):
-    """Construct the cuOpt QP. Returns (problem, weight_vars, settings)."""
-    api = load_cuopt()
+def build_mean_variance_problem(
+    cov: np.ndarray,
+    mu: np.ndarray,
+    spec: PortfolioSpec,
+    api: CuOptApi | None = None,
+    scale: float | None = None,
+):
+    """Construct the cuOpt QP. Returns (problem, weight_vars, api).
+
+    ``api`` and ``scale`` default to the installed cuOpt and its probed
+    quadratic convention; tests pass a stand-in to check the model without a GPU.
+    """
+    api = api or load_cuopt()
     n = len(mu)
 
     prob = api.Problem("Mean-Variance Portfolio")
 
-    # Linear objective coefficients carried on the variables themselves.
+    # Weights first: the padded risk matrix below relies on them occupying the
+    # leading n variable indices.
     weights = [
-        prob.addVariable(
-            lb=spec.min_weight,
-            ub=spec.max_weight,
-            obj=float(-spec.risk_aversion * mu[i]),
-            name=f"w_{i}",
-        )
+        prob.addVariable(lb=spec.min_weight, ub=spec.max_weight, name=f"w_{i}")
         for i in range(n)
     ]
 
@@ -87,13 +103,19 @@ def build_mean_variance_problem(cov: np.ndarray, mu: np.ndarray, spec: Portfolio
         turnover = api.LinearExpression(aux, [1.0] * n, 0.0)
         prob.addConstraint(turnover <= float(spec.turnover_budget), name="turnover")
 
-    # Quadratic risk term, scaled into cuOpt's convention so the reported
-    # objective is comparable with CVXPY's w'Sigma w.
-    scale = quadratic_convention()
-    qmatrix = (cov * scale).tolist()
-    quad_risk = api.QuadraticExpression(qmatrix, weights)
+    # Risk term w'Σw, scaled into cuOpt's convention so the objective is
+    # comparable with CVXPY's, and zero-padded over any auxiliary variables.
+    scale = quadratic_convention() if scale is None else scale
+    risk = coo_matrix(np.asarray(cov, dtype=np.float64) * scale)
+    num_vars = prob.NumVariables
+    qmatrix = coo_matrix((risk.data, (risk.row, risk.col)), shape=(num_vars, num_vars))
+    quad_risk = api.QuadraticExpression(qmatrix, prob.getVariables())
 
-    prob.setObjective(quad_risk, sense=api.MINIMIZE)
+    # Return term -λμ'w inside the objective expression: setObjective discards
+    # coefficients set any other way.
+    ret = api.LinearExpression(weights, (-spec.risk_aversion * np.asarray(mu)).tolist(), 0.0)
+
+    prob.setObjective(quad_risk + ret, sense=api.MINIMIZE)
     return prob, weights, api
 
 
