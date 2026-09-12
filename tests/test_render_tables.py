@@ -93,3 +93,24 @@ def test_speedup_tables_render_each_gpu_host_with_its_environment(tmp_path):
     assert "NVIDIA GeForce RTX 4090" in text
     assert "| solve | 50 | 4.0 ms | 20.0 ms | 0.20× |" in text
     assert "| solve | 3000 | 9.00 s | 900.0 ms | 10.00× |" in text
+
+
+def test_speedup_tables_name_the_covariance_estimator_each_sweep_used(tmp_path):
+    """Two sweeps on one GPU that differ only in estimator must not render as
+    two identically-titled tables; the estimator comes from the raw timings."""
+    for name, estimator in [("rtx-wsl2", "ledoit_wolf"), ("rtx-wsl2-pca", "pca_factor")]:
+        host = tmp_path / name
+        host.mkdir()
+        (host / "environment.json").write_text(json.dumps({"gpu": "NVIDIA GeForce RTX 4060 Laptop GPU"}))
+        pd.DataFrame({"stage": ["risk_model"], "n_assets": [50], "n_days": [2520],
+                      "cpu": [0.002], "gpu": [0.2], "speedup": [0.01]}).to_csv(
+            host / "speedup_table.csv", index=False)
+        pd.DataFrame({"stage": ["features", "risk_model"], "backend": ["gpu", "gpu"],
+                      "n_assets": [50, 50], "median_s": [0.3, 0.2],
+                      "extra_estimator": [None, estimator]}).to_csv(host / "timings_raw.csv", index=False)
+
+    headers = [line for line in speedup_tables(tmp_path).splitlines() if line.startswith("**")]
+
+    assert len(headers) == 2
+    assert "ledoit_wolf" in headers[0] and "pca_factor" not in headers[0]
+    assert "pca_factor" in headers[1] and "ledoit_wolf" not in headers[1]

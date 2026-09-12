@@ -43,7 +43,7 @@ Generated from the committed files in `benchmarks/results/` by
 parity checks pass on the same machine.
 
 <!-- BEGIN GENERATED: gpu-speedup -->
-**NVIDIA GeForce RTX 4060 Laptop GPU, 8188 MiB, 592.82** — `benchmarks/results/rtx4060-wsl2/`
+**NVIDIA GeForce RTX 4060 Laptop GPU, 8188 MiB, 592.82** — `ledoit_wolf` covariance — `benchmarks/results/rtx4060-wsl2/`
 
 | stage | assets | CPU | GPU | speedup |
 |---|---|---|---|---|

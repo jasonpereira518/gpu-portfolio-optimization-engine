@@ -105,8 +105,19 @@ def _seconds(value: float) -> str:
     return f"{value:.2f} s" if value >= 1.0 else f"{value * 1e3:.1f} ms"
 
 
+def _estimators(host: Path) -> list[str]:
+    """Covariance estimator(s) a sweep ran with, as recorded in its raw timings."""
+    raw_csv = host / "timings_raw.csv"
+    if not raw_csv.exists():
+        return []
+    raw = pd.read_csv(raw_csv)
+    if "extra_estimator" not in raw:
+        return []
+    return sorted(raw["extra_estimator"].dropna().unique())
+
+
 def speedup_tables(results: Path) -> str:
-    """One table per GPU host whose sweep results are committed."""
+    """One table per GPU sweep whose results are committed."""
     sections = []
     for host in sorted(p for p in results.iterdir() if p.is_dir() and p.name != "backtest"):
         table_csv, env_json = host / "speedup_table.csv", host / "environment.json"
@@ -119,8 +130,10 @@ def speedup_tables(results: Path) -> str:
         table["order"] = table["stage"].map(
             {s: i for i, s in enumerate(STAGE_ORDER)}).fillna(len(STAGE_ORDER))
         table = table.sort_values(["order", "n_assets"])
+        # One GPU can have several sweeps (e.g. per estimator); say which this is.
+        estimator = "".join(f" `{e}` covariance —" for e in _estimators(host))
         lines = [
-            f"**{env.get('gpu', 'unknown GPU')}** — `benchmarks/results/{host.name}/`",
+            f"**{env.get('gpu', 'unknown GPU')}** —{estimator} `benchmarks/results/{host.name}/`",
             "",
             "| stage | assets | CPU | GPU | speedup |",
             "|---|---|---|---|---|",
