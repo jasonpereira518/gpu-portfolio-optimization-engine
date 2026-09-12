@@ -1,0 +1,17 @@
+{
+  "source": "synthetic",
+  "n": 150,
+  "start": "2014-01-01",
+  "days": 2520,
+  "frequency": "QE",
+  "lookback": 756,
+  "estimator": "ledoit_wolf",
+  "risk_aversion": 2.0,
+  "max_weight": null,
+  "cost_bps": 10.0,
+  "universe": "synthetic-150",
+  "n_assets": 150,
+  "price_rows": "2014-01-01..2023-08-29",
+  "scored_window": "2016-12-30..2023-08-29",
+  "max_weight_applied": 0.05333333333333334
+}
