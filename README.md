@@ -22,16 +22,19 @@ reference.
 | CPU optimizer (CVXPY + Clarabel QP: box, budget, turnover, group caps)        | Complete, tested                                                                                         |
 | Backtest engine (rolling rebalance, costs, no-lookahead, invested-window scoring) | Complete, tested                                                                                     |
 | Benchmark harness (per-stage, warm-up separated, variance reported)           | Complete                                                                                                 |
-| GPU pipeline (cuDF/CuPy/cuML)                                                 | Written, **not yet executed** — no CUDA host available                                                   |
-| cuOpt QP + MIP layer                                                          | Model assembly tested against cuOpt's model-building semantics; **not yet executed on a GPU**            |
+| GPU pipeline (cuDF/CuPy for returns, rolling features, Ledoit-Wolf covariance) | Executed on an RTX 4060 Laptop GPU (WSL2); parity and benchmark results committed                       |
+| cuOpt QP layer (box, budget, turnover, group caps)                           | Executed on an RTX 4060 Laptop GPU (WSL2); parity-checked against CVXPY, results committed               |
+| cuOpt MIP layer (turnover lot-rounding, [`turnover_mip_cuopt.py`](optimizer/turnover_mip_cuopt.py)) | Model assembly tested off-GPU; **not yet executed on a GPU** — no test or benchmark exercises it yet |
+| cuML PCA factor covariance estimator                                         | Tested off-GPU (`--estimator pca_factor`); **not yet executed on a GPU** — parity/benchmark runs so far used Ledoit-Wolf only |
 | NIM explainer (stretch)                                                       | Written with an offline fallback, **not yet executed**                                                   |
 
-**There are no speedup numbers in this README yet, and there will not be until
-the GPU code has actually run.** Everything above marked "not yet executed" is
-code written against NVIDIA's published API and guarded so that it fails with an
-actionable message rather than silently falling back to CPU. Section
+GPU numbers below are from a single RTX 4060 Laptop GPU under WSL2 — see
+[docs/setup-wsl2.md](docs/setup-wsl2.md) for the bring-up sequence. Rows still
+marked "not yet executed" are code written against NVIDIA's published API and
+guarded so that it fails with an actionable message rather than silently
+falling back to CPU. Section
 "[Reproducing the GPU results](#reproducing-the-gpu-results)" is the exact
-sequence to fill in the missing column.
+sequence to fill in the missing rows.
 
 ### GPU results
 
