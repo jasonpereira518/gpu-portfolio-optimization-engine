@@ -22,7 +22,7 @@ from data.universe import synthetic_prices
 from optimizer.cuopt_compat import cuopt_available
 from optimizer.mean_variance_cpu import solve_mean_variance_cpu
 from optimizer.spec import PortfolioSpec
-from optimizer.turnover_mip_cuopt import round_lots_greedy, solve_lot_rounding_cuopt
+from optimizer.turnover_mip_cuopt import DEFAULT_MAX_CASH, round_lots_greedy, solve_lot_rounding_cuopt
 from pipeline.cpu_baseline import build_risk_model
 from tests.fake_cuopt import FAKE_API
 
@@ -40,7 +40,7 @@ TARGET = np.array([0.43, 0.31, 0.26])
 VALUE = 1_000.0
 
 
-def _brute_force(target, prices, value, lot_size, allow_cash, prev_shares=None,
+def _brute_force(target, prices, value, lot_size, max_cash, prev_shares=None,
                  cost_per_share=0.0, max_trades=None):
     """Best objective over every lot vector, by enumeration.
 
@@ -53,9 +53,7 @@ def _brute_force(target, prices, value, lot_size, allow_cash, prev_shares=None,
     lots = np.array(list(itertools.product(*(range(k + 1) for k in limits))), dtype=float)
 
     invested = lots @ lot_weight
-    feasible = invested <= 1.0 + 1e-9
-    if not allow_cash:
-        feasible &= invested >= 1.0 - 1e-9
+    feasible = (invested <= 1.0 + 1e-9) & (invested >= 1.0 - max_cash - 1e-9)
     traded = np.abs(lots - prev_lots)
     if max_trades is not None:
         feasible &= (traded > 1e-9).sum(axis=1) <= max_trades
@@ -100,24 +98,27 @@ def rebalance(universe):
 # Hand-derived answers
 # ---------------------------------------------------------------------------
 
-def test_fully_invested_rounding_matches_hand_derivation():
-    """sum(w) == 1: 10a + 5b + 2c = 100 forces b even, and (4, 6, 15) is the
-    closest such point: 0.03 + 0.01 under on A and B, 0.04 over on C."""
-    solution = solve_lot_rounding_cuopt(TARGET, PRICES, VALUE, api=FAKE_API)
+@pytest.mark.parametrize("max_cash, shares, error", [
+    # Fully invested: 10a + 5b + 2c = 100 forces b even, and (4, 6, 15) is the
+    # closest such point — 0.03 and 0.01 under on A and B, 0.04 over on C.
+    (0.0, [4, 6, 15], 0.08),
+    # 99-100% invested admits nothing closer.
+    (0.01, [4, 6, 15], 0.08),
+    # 97-100% admits greedy's own answer, 98% invested.
+    (0.03, [4, 6, 14], 0.06),
+    # 95-100% lets every asset sit at its nearest lot, 96% invested ...
+    (0.05, [4, 6, 13], 0.04),
+    # ... which is also the optimum when any amount of cash is allowed.
+    (1.0, [4, 6, 13], 0.04),
+])
+def test_cash_band_matches_hand_derivation(max_cash, shares, error):
+    """Invested between 1 - max_cash and 1: the band spans both rules measured
+    on the GPU, exact full investment at 0 and greedy's own rule at 1."""
+    solution = solve_lot_rounding_cuopt(TARGET, PRICES, VALUE, max_cash=max_cash, api=FAKE_API)
 
-    np.testing.assert_array_equal(solution.shares, [4, 6, 15])
-    assert solution.tracking_error == pytest.approx(0.08)
-    assert solution.weights.sum() == pytest.approx(1.0)
-
-
-def test_cash_allowed_rounding_matches_hand_derivation():
-    """sum(w) <= 1: every asset can round to its nearest lot (4, 6, 13) and
-    the 4% left over stays in cash."""
-    solution = solve_lot_rounding_cuopt(TARGET, PRICES, VALUE, allow_cash=True, api=FAKE_API)
-
-    np.testing.assert_array_equal(solution.shares, [4, 6, 13])
-    assert solution.tracking_error == pytest.approx(0.04)
-    assert solution.weights.sum() == pytest.approx(0.96)
+    np.testing.assert_array_equal(solution.shares, shares)
+    assert solution.tracking_error == pytest.approx(error)
+    assert 1.0 - max_cash - 1e-9 <= solution.weights.sum() <= 1.0 + 1e-9
 
 
 def test_greedy_sits_between_the_two_budget_rules_on_the_hand_example():
@@ -136,12 +137,12 @@ def test_greedy_sits_between_the_two_budget_rules_on_the_hand_example():
 # The formulation against brute force
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("allow_cash", [False, True])
+@pytest.mark.parametrize("max_cash", [0.0, 0.05, 1.0])
 @pytest.mark.parametrize("case", ["plain", "costs", "trade_limit"])
-def test_mip_optimum_matches_brute_force(allow_cash, case):
+def test_mip_optimum_matches_brute_force(max_cash, case):
     """Every branch of the model — plain rounding, the transaction-cost term
     with existing holdings, and the binary trade-count limit — reaches the
-    enumerated optimum."""
+    enumerated optimum, under each kind of budget rule."""
     prices = np.array([70.0, 45.0, 30.0, 25.0])
     target = np.array([0.35, 0.30, 0.20, 0.15])
     value, lot_size = 1_000.0, 1
@@ -153,9 +154,9 @@ def test_mip_optimum_matches_brute_force(allow_cash, case):
 
     solution = solve_lot_rounding_cuopt(
         target, prices, value, prev_shares=prev_shares, lot_size=lot_size,
-        cost_per_share=cost, max_trades=max_trades, allow_cash=allow_cash, api=FAKE_API,
+        cost_per_share=cost, max_trades=max_trades, max_cash=max_cash, api=FAKE_API,
     )
-    want = _brute_force(target, prices, value, lot_size, allow_cash,
+    want = _brute_force(target, prices, value, lot_size, max_cash,
                         prev_shares=prev_shares, cost_per_share=cost, max_trades=max_trades)
 
     assert _objective(solution, value) == pytest.approx(want, abs=1e-6)
@@ -173,10 +174,10 @@ def test_a_trade_limit_can_always_keep_the_current_book():
     prev_shares = np.array([3.0, 8.0, 5.0, 4.0])
 
     solution = solve_lot_rounding_cuopt(target, prices, VALUE, prev_shares=prev_shares, max_trades=1,
-                                        allow_cash=True, api=FAKE_API)
+                                        max_cash=1.0, api=FAKE_API)
 
     assert solution.n_trades <= 1
-    want = _brute_force(target, prices, VALUE, 1, True, prev_shares=prev_shares, max_trades=1)
+    want = _brute_force(target, prices, VALUE, 1, 1.0, prev_shares=prev_shares, max_trades=1)
     assert _objective(solution, VALUE) == pytest.approx(want, abs=1e-6)
 
 
@@ -192,10 +193,9 @@ def test_a_realistic_per_share_fee_never_leaves_the_mip_worse_off_than_ignoring_
     def with_fees(solution):
         return solution.tracking_error + fee * np.abs(solution.shares - prev_shares).sum() / BOOK
 
-    blind = solve_lot_rounding_cuopt(target, prices, BOOK, prev_shares=prev_shares,
-                                     allow_cash=True, api=FAKE_API)
+    blind = solve_lot_rounding_cuopt(target, prices, BOOK, prev_shares=prev_shares, api=FAKE_API)
     aware = solve_lot_rounding_cuopt(target, prices, BOOK, prev_shares=prev_shares, cost_per_share=fee,
-                                     allow_cash=True, api=FAKE_API)
+                                     api=FAKE_API)
 
     assert with_fees(aware) <= with_fees(blind) + 1e-6  # HiGHS's default absolute MIP gap
 
@@ -222,8 +222,30 @@ def test_cash_allowed_mip_is_never_worse_than_greedy(seed):
     for lot_size in (1, 10):
         greedy = round_lots_greedy(target, prices, 250_000.0, lot_size=lot_size)
         mip = solve_lot_rounding_cuopt(target, prices, 250_000.0, lot_size=lot_size,
-                                       allow_cash=True, api=FAKE_API)
+                                       max_cash=1.0, api=FAKE_API)
         assert mip.tracking_error <= greedy.tracking_error + 1e-9
+
+
+@pytest.mark.parametrize("seed", range(5))
+def test_the_default_band_caps_cash_and_beats_greedy_when_greedy_fits_in_it(seed):
+    """The default rule keeps at most DEFAULT_MAX_CASH uninvested — no cash
+    hoarding — and whenever greedy's own leftover cash fits inside the band,
+    greedy's answer is feasible, so the MIP cannot track worse."""
+    rng = np.random.default_rng(seed)
+    n = 25
+    target = rng.dirichlet(np.ones(n))
+    prices = rng.uniform(5.0, 500.0, n)
+    for lot_size in (1, 10):
+        greedy = round_lots_greedy(target, prices, 250_000.0, lot_size=lot_size)
+        mip = solve_lot_rounding_cuopt(target, prices, 250_000.0, lot_size=lot_size, api=FAKE_API)
+        assert 1.0 - mip.weights.sum() <= DEFAULT_MAX_CASH + 1e-9
+        if 1.0 - greedy.weights.sum() <= DEFAULT_MAX_CASH:
+            assert mip.tracking_error <= greedy.tracking_error + 1e-9
+
+
+def test_a_budget_band_outside_zero_to_one_is_rejected():
+    with pytest.raises(ValueError, match="max_cash"):
+        solve_lot_rounding_cuopt(TARGET, PRICES, VALUE, max_cash=1.5, api=FAKE_API)
 
 
 # ---------------------------------------------------------------------------
@@ -231,35 +253,42 @@ def test_cash_allowed_mip_is_never_worse_than_greedy(seed):
 # ---------------------------------------------------------------------------
 
 @requires_cuopt
-@pytest.mark.parametrize("allow_cash", [False, True], ids=["fully_invested", "cash_allowed"])
+@pytest.mark.parametrize("max_cash", [0.0, DEFAULT_MAX_CASH, 1.0],
+                         ids=["fully_invested", "cash_band", "cash_allowed"])
 @pytest.mark.parametrize("lot_size", [1, 10, 100])
 @pytest.mark.parametrize("turnover_budget", [None, 0.25], ids=["no_turnover_cap", "turnover_0.25"])
-def test_two_stage_qp_then_mip_on_gpu(universe, turnover_budget, lot_size, allow_cash):
+def test_two_stage_qp_then_mip_on_gpu(universe, turnover_budget, lot_size, max_cash):
     """Stage 1 on cuOpt's QP, stage 2 on cuOpt's MIP, held to HiGHS's proven
-    optimum of the cash-allowed model built by the same code."""
+    optimum of the same model built by the same code."""
     from optimizer.mean_variance_cuopt import solve_mean_variance_cuopt
 
     last, model = universe
     spec, w_prev = _spec(turnover_budget)
     target = solve_mean_variance_cuopt(model, spec).weights
 
-    gpu = solve_lot_rounding_cuopt(target, last, BOOK, lot_size=lot_size, allow_cash=allow_cash,
+    gpu = solve_lot_rounding_cuopt(target, last, BOOK, lot_size=lot_size, max_cash=max_cash,
                                    time_limit=30.0)
-    cash_optimum = solve_lot_rounding_cuopt(target, last, BOOK, lot_size=lot_size, allow_cash=True,
-                                            api=FAKE_API)
 
     assert gpu.status in ("Optimal", "FeasibleFound")
     assert np.all(np.isfinite(gpu.shares)) and np.all(gpu.shares >= 0)
     invested = gpu.weights.sum()
-    assert invested <= 1.0 + 1e-5  # cuOpt's feasibility tolerance is 1e-6; rounding adds a little
-    if allow_cash:
-        assert gpu.tracking_error == pytest.approx(cash_optimum.tracking_error, rel=MIP_RTOL, abs=1e-7)
+    # cuOpt's feasibility tolerance is 1e-6; rounding the lots adds a little.
+    assert 1.0 - max_cash - 1e-5 <= invested <= 1.0 + 1e-5
+    if max_cash > 0:
+        # A band (or no floor at all) is well-posed: its optimum does not hinge
+        # on a 1e-8 budget residual, so cuOpt must land on HiGHS's.
+        optimum = solve_lot_rounding_cuopt(target, last, BOOK, lot_size=lot_size, max_cash=max_cash,
+                                           api=FAKE_API)
+        assert gpu.tracking_error == pytest.approx(optimum.tracking_error, rel=MIP_RTOL, abs=1e-7)
         greedy = round_lots_greedy(target, last, BOOK, lot_size=lot_size)
-        assert gpu.tracking_error <= greedy.tracking_error * (1 + MIP_RTOL) + 1e-9
+        if 1.0 - greedy.weights.sum() <= max_cash:
+            assert gpu.tracking_error <= greedy.tracking_error * (1 + MIP_RTOL) + 1e-9
     else:
-        assert invested >= 1.0 - 1e-5
-        # Fully invested is the cash-allowed model plus a constraint, so it can
-        # match that optimum at best; doing better would mean overspending.
+        # Exact investment is tolerance-defined, so there is no single optimum
+        # to match. It is the cash-allowed model plus a constraint, though, so
+        # it can match that optimum at best; doing better would mean overspending.
+        cash_optimum = solve_lot_rounding_cuopt(target, last, BOOK, lot_size=lot_size, max_cash=1.0,
+                                                api=FAKE_API)
         assert gpu.tracking_error >= cash_optimum.tracking_error * (1 - MIP_RTOL) - 1e-7
 
     if turnover_budget is not None:
@@ -280,7 +309,9 @@ def test_mip_trading_terms_on_gpu_match_highs(rebalance, case):
     (~$10); at $20 it moves 14 of the 40 names.
     """
     target, last, prev_shares = rebalance
-    kwargs = {"prev_shares": prev_shares, "allow_cash": True,
+    # Any cash allowed: the whole-share book is only 99.15% invested, so under
+    # a tighter band trading nothing would not be an option.
+    kwargs = {"prev_shares": prev_shares, "max_cash": 1.0,
               "cost_per_share": 20.0 if case == "costs" else 0.0,
               "max_trades": 10 if case == "trade_limit" else None}
 

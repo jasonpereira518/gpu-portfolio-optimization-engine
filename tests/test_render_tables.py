@@ -138,11 +138,30 @@ def test_lot_rounding_table_sets_each_mip_budget_rule_against_greedy(tmp_path):
 
     text = lot_rounding_tables(tmp_path)
 
+    # Results from before the cash band existed render with its columns empty.
     assert "NVIDIA GeForce RTX 4060 Laptop GPU" in text
-    assert ("| 50 | none | 1 | 0.64% | 0.61% (4.7% better) | 0.5% (22% better) | 0.002% / 0.33% "
-            "| 2.50 s / 10.0 ms |") in text
-    assert "| 200 | 0.25 | 100 | 112% | 116% (3.6% worse) † | no solution | 0.004% / — | 60.00 s / — |" in text
+    assert ("| 50 | none | 1 | 0.64% | 0.61% (4.7% better) | — | 0.5% (22% better) "
+            "| 0.002% / — / 0.33% | 2.50 s / — / 10.0 ms |") in text
+    assert ("| 200 | 0.25 | 100 | 112% | 116% (3.6% worse) † | — | no solution "
+            "| 0.004% / — / — | 60.00 s / — / — |") in text
     assert "† " in text.splitlines()[-1]  # the time-limit footnote, only when needed
+
+
+def test_lot_rounding_table_shows_the_cash_band_between_the_other_rules(tmp_path):
+    host = tmp_path / "rtx-wsl2-lots"
+    host.mkdir()
+    (host / "environment.json").write_text(json.dumps({"gpu": "NVIDIA GeForce RTX 4060 Laptop GPU"}))
+    pd.DataFrame([
+        _lot_row(50, None, 10, "greedy", "Greedy", 0.061, 0.00008, 0.0),
+        _lot_row(50, None, 10, "mip_fully_invested", "Optimal", 0.0611, 0.0, 4.2),
+        _lot_row(50, None, 10, "mip_cash_band", "Optimal", 0.0574, 0.005, 1.5),
+        _lot_row(50, None, 10, "mip_cash_allowed", "Optimal", 0.0511, 0.025, 8.2),
+    ]).to_csv(host / "lot_rounding.csv", index=False)
+
+    row = [line for line in lot_rounding_tables(tmp_path).splitlines() if line.startswith("| 50 |")][0]
+
+    assert row == ("| 50 | none | 10 | 6.1% | 6.1% (0.16% worse) | 5.7% (5.9% better) | 5.1% (16% better) "
+                   "| 0.008% / 0.5% / 2.5% | 4.20 s / 1.50 s / 8.20 s |")
 
 
 def test_lot_rounding_table_never_rounds_a_loss_into_a_tie(tmp_path):

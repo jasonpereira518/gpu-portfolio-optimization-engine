@@ -42,8 +42,9 @@ def test_lot_rounding_sweep_puts_each_budget_rule_next_to_greedy():
     assert len(cases) == 2
     for _, case in cases:
         by = case.set_index("method")
-        assert set(by.index) == {"greedy", "mip_fully_invested", "mip_cash_allowed"}
+        assert set(by.index) == {"greedy", "mip_fully_invested", "mip_cash_band", "mip_cash_allowed"}
         assert abs(by.loc["mip_fully_invested", "cash"]) < 1e-5
+        assert by.loc["mip_cash_band", "cash"] <= by.loc["mip_cash_band", "max_cash"] + 1e-9
         assert by.loc["mip_cash_allowed", "tracking_error"] <= by.loc["greedy", "tracking_error"] + 1e-9
 
 

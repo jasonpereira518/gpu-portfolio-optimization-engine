@@ -92,35 +92,36 @@ parity checks pass on the same machine.
 ### Lot rounding: MIP vs greedy
 
 Stage 2 rounds the stage-1 weights to whole lots. Each row rounds one QP target
-three ways and reports L1 tracking error to it, as a share of the book; the MIP
-columns add, in parentheses, how that compares with greedy's. "Fully invested"
-is the MIP's default budget rule (realized weights sum to exactly 1); "cash
-allowed" is greedy's own rule (they sum to at most 1), under which greedy's
-answer is always feasible for the MIP.
+four ways and reports L1 tracking error to it, as a share of the book; the MIP
+columns add, in parentheses, how that compares with greedy's. The MIP runs
+under three budget rules: "fully invested" (realized weights sum to exactly
+1), "cash allowed" (greedy's own rule: they sum to at most 1, so greedy's
+answer is always feasible for the MIP), and between them the default "cash
+band" (invested between 99.5% and 100%).
 
 <!-- BEGIN GENERATED: lot-rounding -->
 **NVIDIA GeForce RTX 4060 Laptop GPU, 8188 MiB, 592.82** — $1M book — `benchmarks/results/rtx4060-wsl2-lots/`
 
-| assets | turnover cap | lot | greedy | MIP, fully invested | MIP, cash allowed | cash left: greedy / MIP, cash allowed | MIP solve: fully invested / cash allowed |
-|---|---|---|---|---|---|---|---|
-| 50 | none | 1 | 0.55% | 0.55% (0.2% worse) | 0.54% (2.2% better) | 0.0011% / 0.013% | 2.61 s / 7.65 s |
-| 50 | none | 10 | 6.1% | 6.1% (0.14% worse) | 5.1% (16% better) | 0.0083% / 2.5% | 4.23 s / 8.23 s |
-| 50 | none | 100 | 40% | 41% (2.7% worse) | 38% (5.8% better) | 0.13% / 3.4% | 2.77 s / 3.10 s |
-| 50 | 0.25 | 1 | 0.84% | 0.53% (36% better) | 0.52% (37% better) | 0% / 0.002% | 5.30 s / 7.95 s |
-| 50 | 0.25 | 10 | 7% | 7% (0.061% worse) | 6.3% (10% better) | 0.0041% / 4.4% | 4.30 s / 4.67 s |
-| 50 | 0.25 | 100 | 55% | 56% (1.1% worse) | 50% (9.7% better) | 0.034% / 32% | 9.56 s / 9.94 s |
-| 200 | none | 1 | 0.94% | 0.95% (1.6% worse) | 0.93% (0.47% better) | 0% / 0.0048% | 3.92 s / 5.00 s |
-| 200 | none | 10 | 11% | 11% (0.39% worse) | 11% (2.5% better) | 0% / 4.5% | 23.49 s / 4.65 s |
-| 200 | none | 100 | 83% | 84% (1.7% worse) | 79% (4.9% better) | 0.076% / 34% | 12.97 s / 2.67 s |
-| 200 | 0.25 | 1 | 1.3% | 1.3% (1.1% worse) † | 1.3% (0.22% better) † | 0% / 0.0029% | 60.05 s / 60.02 s |
-| 200 | 0.25 | 10 | 14% | 14% (0.5% worse) † | 14% (0.83% better) | 0.0044% / 4.4% | 60.08 s / 5.09 s |
-| 200 | 0.25 | 100 | 104% | 104% (0.0075% worse) | 88% (15% better) | 0.0082% / 70% | 36.38 s / 3.74 s |
-| 500 | none | 1 | 4.7% | 4.7% (0.27% worse) † | 4.7% (0.25% better) | 0% / 0.04% | 60.18 s / 8.71 s |
-| 500 | none | 10 | 52% | 52% (0.56% worse) † | 50% (3.7% better) | 0.007% / 18% | 60.03 s / 5.24 s |
-| 500 | none | 100 | 172% | 172% (0.032% worse) † | 100% (42% better) | 0.055% / 100% | 60.03 s / 434.3 ms |
-| 500 | 0.25 | 1 | 7.1% | 7.2% (1.3% worse) † | 7.1% (0.012% better) † | 0% / 0.0073% | 60.11 s / 60.05 s |
-| 500 | 0.25 | 10 | 75% | 75% (0.16% worse) † | 68% (8.9% better) | 0.011% / 39% | 60.05 s / 3.50 s |
-| 500 | 0.25 | 100 | 171% | 171% (0.061% worse) † | 100% (41% better) | 0.11% / 100% | 62.05 s / 1.06 s |
+| assets | turnover cap | lot | greedy | MIP, fully invested | MIP, cash band | MIP, cash allowed | cash left: greedy / band / cash allowed | MIP solve: fully invested / band / cash allowed |
+|---|---|---|---|---|---|---|---|---|
+| 50 | none | 1 | 0.55% | 0.55% (0.2% worse) | — | 0.54% (2.2% better) | 0.0011% / — / 0.013% | 2.61 s / — / 7.65 s |
+| 50 | none | 10 | 6.1% | 6.1% (0.14% worse) | — | 5.1% (16% better) | 0.0083% / — / 2.5% | 4.23 s / — / 8.23 s |
+| 50 | none | 100 | 40% | 41% (2.7% worse) | — | 38% (5.8% better) | 0.13% / — / 3.4% | 2.77 s / — / 3.10 s |
+| 50 | 0.25 | 1 | 0.84% | 0.53% (36% better) | — | 0.52% (37% better) | 0% / — / 0.002% | 5.30 s / — / 7.95 s |
+| 50 | 0.25 | 10 | 7% | 7% (0.061% worse) | — | 6.3% (10% better) | 0.0041% / — / 4.4% | 4.30 s / — / 4.67 s |
+| 50 | 0.25 | 100 | 55% | 56% (1.1% worse) | — | 50% (9.7% better) | 0.034% / — / 32% | 9.56 s / — / 9.94 s |
+| 200 | none | 1 | 0.94% | 0.95% (1.6% worse) | — | 0.93% (0.47% better) | 0% / — / 0.0048% | 3.92 s / — / 5.00 s |
+| 200 | none | 10 | 11% | 11% (0.39% worse) | — | 11% (2.5% better) | 0% / — / 4.5% | 23.49 s / — / 4.65 s |
+| 200 | none | 100 | 83% | 84% (1.7% worse) | — | 79% (4.9% better) | 0.076% / — / 34% | 12.97 s / — / 2.67 s |
+| 200 | 0.25 | 1 | 1.3% | 1.3% (1.1% worse) † | — | 1.3% (0.22% better) † | 0% / — / 0.0029% | 60.05 s / — / 60.02 s |
+| 200 | 0.25 | 10 | 14% | 14% (0.5% worse) † | — | 14% (0.83% better) | 0.0044% / — / 4.4% | 60.08 s / — / 5.09 s |
+| 200 | 0.25 | 100 | 104% | 104% (0.0075% worse) | — | 88% (15% better) | 0.0082% / — / 70% | 36.38 s / — / 3.74 s |
+| 500 | none | 1 | 4.7% | 4.7% (0.27% worse) † | — | 4.7% (0.25% better) | 0% / — / 0.04% | 60.18 s / — / 8.71 s |
+| 500 | none | 10 | 52% | 52% (0.56% worse) † | — | 50% (3.7% better) | 0.007% / — / 18% | 60.03 s / — / 5.24 s |
+| 500 | none | 100 | 172% | 172% (0.032% worse) † | — | 100% (42% better) | 0.055% / — / 100% | 60.03 s / — / 434.3 ms |
+| 500 | 0.25 | 1 | 7.1% | 7.2% (1.3% worse) † | — | 7.1% (0.012% better) † | 0% / — / 0.0073% | 60.11 s / — / 60.05 s |
+| 500 | 0.25 | 10 | 75% | 75% (0.16% worse) † | — | 68% (8.9% better) | 0.011% / — / 39% | 60.05 s / — / 3.50 s |
+| 500 | 0.25 | 100 | 171% | 171% (0.061% worse) † | — | 100% (41% better) | 0.11% / — / 100% | 62.05 s / — / 1.06 s |
 
 † hit the time limit: the best solution found is shown, not a proven optimum.
 <!-- END GENERATED: lot-rounding -->
@@ -244,7 +245,7 @@ within a solver's feasibility tolerance, which then decides the answer: on a
 ten cents on $1M — moved HiGHS's proven optimum 5%, and cuOpt's and HiGHS's
 "optimal" fully-invested answers differ by as much as 6.4%, in both directions.
 (Under the cash-allowed rule they agree exactly.) Under greedy's
-own rule (`allow_cash=True`) cuOpt matches HiGHS's proven optimum and beats
+own rule (`max_cash=1`) cuOpt matches HiGHS's proven optimum and beats
 greedy in every case — but by 0.5% or less in four of the six single-share
 cases, and at 10- and 100-share lots largely by leaving cash uninvested, up to
 the whole book. Two more properties of the stage-2 objective, measured rather

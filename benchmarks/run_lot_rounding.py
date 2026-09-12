@@ -6,10 +6,11 @@ For each universe size and turnover cap, stage 1 (the mean-variance QP) runs
 once on CVXPY, so every host rounds the same target weights; the full
 two-stage path on GPU — cuOpt QP into cuOpt MIP — is what
 ``tests/test_lot_rounding.py`` exercises. Each target is then rounded to
-every lot size three ways:
+every lot size four ways:
 
   greedy               floor, then the largest remainders while cash lasts
-  mip_fully_invested   cuOpt MIP, realized weights sum to exactly 1 (the default)
+  mip_fully_invested   cuOpt MIP, realized weights sum to exactly 1
+  mip_cash_band        cuOpt MIP, between 1 - DEFAULT_MAX_CASH and 1 (the default)
   mip_cash_allowed     cuOpt MIP, sum <= 1 — greedy's own budget rule
 
 Each row records tracking error (L1 to target), the cash left uninvested,
@@ -33,6 +34,7 @@ from optimizer.cuopt_compat import CuOptApi, cuopt_available, load_cuopt
 from optimizer.mean_variance_cpu import solve_mean_variance_cpu
 from optimizer.spec import PortfolioSpec
 from optimizer.turnover_mip_cuopt import (
+    DEFAULT_MAX_CASH,
     LotSolution,
     report_drift,
     round_lots_greedy,
@@ -40,7 +42,8 @@ from optimizer.turnover_mip_cuopt import (
 )
 from pipeline.cpu_baseline import build_risk_model
 
-MIP_BUDGETS = {"mip_fully_invested": False, "mip_cash_allowed": True}
+# Method -> max_cash: the two rules measured first, and the band between them.
+MIP_BUDGETS = {"mip_fully_invested": 0.0, "mip_cash_band": DEFAULT_MAX_CASH, "mip_cash_allowed": 1.0}
 
 
 def _row(case: dict, method: str, solver: str, solution: LotSolution, target: np.ndarray,
@@ -95,16 +98,17 @@ def run_lot_rounding(
                 rows.append(_row(case, "greedy", "numpy", greedy, target, w_prev, cov))
                 if not with_mip:
                     continue
-                for method, allow_cash in MIP_BUDGETS.items():
+                for method, max_cash in MIP_BUDGETS.items():
                     try:
                         solution = solve_lot_rounding_cuopt(
-                            target, last, portfolio_value, lot_size=lot_size, allow_cash=allow_cash,
+                            target, last, portfolio_value, lot_size=lot_size, max_cash=max_cash,
                             time_limit=time_limit, api=api,
                         )
                     except RuntimeError as exc:  # no incumbent: recorded, not skipped
-                        rows.append({**case, "method": method, "status": str(exc)})
+                        rows.append({**case, "method": method, "max_cash": max_cash, "status": str(exc)})
                         continue
-                    rows.append(_row(case, method, solver, solution, target, w_prev, cov))
+                    rows.append({**_row(case, method, solver, solution, target, w_prev, cov),
+                                 "max_cash": max_cash})
     return pd.DataFrame(rows)
 
 
