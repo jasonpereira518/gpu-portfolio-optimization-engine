@@ -19,6 +19,7 @@ import functools
 import importlib
 
 import numpy as np
+import pandas as pd
 
 from pipeline.risk_model import PSD_BY_CONSTRUCTION, TRADING_DAYS, RiskModel
 
@@ -60,6 +61,10 @@ def to_gpu(prices, dtype: str = "float64"):
     cudf, _, _ = load_rapids()
     if isinstance(prices, cudf.DataFrame):
         return prices.astype(dtype)
+    if isinstance(prices.index, pd.DatetimeIndex) and prices.index.freq is not None:
+        # cuDF's DateOffset parser doesn't understand every pandas freq alias
+        # (e.g. "B" for business-day); the freq is metadata only, so drop it.
+        prices = prices.set_axis(pd.DatetimeIndex(prices.index.values), axis=0)
     return cudf.from_pandas(prices).astype(dtype)
 
 

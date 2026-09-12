@@ -149,6 +149,11 @@ def quadratic_convention() -> float:
     prob = api.Problem("convention-probe")
     x = prob.addVariable(lb=0.0, ub=10.0)
     prob.setObjective(api.QuadraticExpression([[1.0]], [x]) + (-1.0) * x, sense=api.MINIMIZE)
+    # cuOpt's QP solver (solve_qcqp) requires a populated CSR constraint
+    # matrix internally, even though the API accepts problems with zero
+    # addConstraint() calls; a redundant, non-binding constraint (already
+    # implied by x's own upper bound) is enough to build one.
+    prob.addConstraint(x <= 10.0, name="probe_bound")
     prob.solve(api.SolverSettings())
 
     value = float(x.getValue())
