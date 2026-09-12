@@ -29,7 +29,7 @@ import pandas as pd
 
 from benchmarks.harness import environment_metadata
 from data.universe import synthetic_prices
-from optimizer.cuopt_compat import CuOptApi, cuopt_available
+from optimizer.cuopt_compat import CuOptApi, cuopt_available, load_cuopt
 from optimizer.mean_variance_cpu import solve_mean_variance_cpu
 from optimizer.spec import PortfolioSpec
 from optimizer.turnover_mip_cuopt import (
@@ -76,7 +76,7 @@ def run_lot_rounding(
     ``api`` defaults to the installed cuOpt; tests pass a stand-in.
     """
     with_mip = api is not None or cuopt_available()
-    solver = f"cuopt-{api.version}" if api is not None else None
+    solver = f"cuopt-{(api or load_cuopt()).version}" if with_mip else None
     rows = []
     for n in sizes:
         prices = synthetic_prices(n, n_days=n_days, seed=seed).prices
@@ -104,10 +104,6 @@ def run_lot_rounding(
                     except RuntimeError as exc:  # no incumbent: recorded, not skipped
                         rows.append({**case, "method": method, "status": str(exc)})
                         continue
-                    if solver is None:
-                        from optimizer.cuopt_compat import load_cuopt
-
-                        solver = f"cuopt-{load_cuopt().version}"
                     rows.append(_row(case, method, solver, solution, target, w_prev, cov))
     return pd.DataFrame(rows)
 
