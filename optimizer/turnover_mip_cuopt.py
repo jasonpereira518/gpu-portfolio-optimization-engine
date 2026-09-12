@@ -153,14 +153,13 @@ def solve_lot_rounding_cuopt(
 
     prob.solve(settings)
 
-    if not is_optimal(prob):
-        # A MIP that hit its time limit with an incumbent is still usable here —
-        # any feasible lot vector is a tradeable portfolio. Surface it rather
-        # than discarding the work, but say so in the status.
-        try:
-            _ = lots[0].getValue()
-        except Exception as exc:
-            raise RuntimeError(f"cuOpt MIP produced no feasible solution: {status_name(prob)}") from exc
+    # A MIP that hit its time limit with an incumbent (FeasibleFound) is still
+    # usable here — any feasible lot vector is a tradeable portfolio — so it is
+    # surfaced, with that status, rather than discarded. Anything else has no
+    # solution, and the status is the only signal: cuOpt's getValue() returns
+    # NaN rather than raising when there is no incumbent.
+    if not (is_optimal(prob) or status_name(prob) == "FeasibleFound"):
+        raise RuntimeError(f"cuOpt MIP produced no feasible solution: {status_name(prob)}")
 
     lot_counts = np.array([v.getValue() for v in lots], dtype=np.float64)
     shares = np.round(lot_counts) * lot_size

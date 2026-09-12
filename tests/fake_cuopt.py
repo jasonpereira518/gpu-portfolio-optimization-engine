@@ -49,12 +49,14 @@ class SolverSettings:
 
 
 class MILPTerminationStatus(IntEnum):
+    """cuOpt 26.08's values (cpp/include/cuopt/mathematical_optimization/constants.h)."""
+
     NoTermination = 0
     Optimal = 1
-    FeasibleFound = 2
-    Infeasible = 3
-    Unbounded = 4
-    TimeLimit = 5
+    Infeasible = 2
+    Unbounded = 3
+    TimeLimit = 5  # hit the limit with no incumbent
+    FeasibleFound = 8  # hit the limit holding an incumbent
 
 
 class Constraint:
@@ -108,6 +110,7 @@ class Variable:
         return self._index
 
     def getValue(self) -> float:
+        # Like cuOpt 26.08: NaN, not an exception, when there is no solution.
         return self._value
 
     def getObjectiveCoefficient(self) -> float:

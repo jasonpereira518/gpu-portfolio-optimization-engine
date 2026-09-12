@@ -126,6 +126,16 @@ def test_mip_optimum_matches_brute_force(allow_cash, case):
         assert solution.n_trades <= max_trades
 
 
+def test_a_mip_without_a_solution_raises_instead_of_returning_nan_holdings():
+    """One asset whose lot is 30% of the book cannot be exactly 100% invested.
+
+    cuOpt's getValue() returns NaN rather than raising when there is no
+    incumbent, so only the termination status can say the solve failed.
+    """
+    with pytest.raises(RuntimeError, match="Infeasible"):
+        solve_lot_rounding_cuopt(np.array([1.0]), np.array([300.0]), VALUE, api=FAKE_API)
+
+
 @pytest.mark.parametrize("seed", range(5))
 def test_cash_allowed_mip_is_never_worse_than_greedy(seed):
     """Greedy never overspends and never exceeds the model's position bounds,
