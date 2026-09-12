@@ -24,7 +24,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from optimizer.cuopt_compat import is_optimal, load_cuopt, status_name
+from optimizer.cuopt_compat import CuOptApi, is_optimal, load_cuopt, status_name
 
 
 @dataclass(frozen=True)
@@ -48,6 +48,8 @@ def solve_lot_rounding_cuopt(
     cost_per_share: float = 0.0,
     max_trades: int | None = None,
     time_limit: float = 60.0,
+    allow_cash: bool = False,
+    api: CuOptApi | None = None,
 ) -> LotSolution:
     """Round ``target_weights`` to integer lots with a cuOpt MIP.
 
@@ -63,8 +65,20 @@ def solve_lot_rounding_cuopt(
     Transaction cost is divided by portfolio value so both terms are in weight
     units and the sum is meaningful; mixing dollars and weights in one linear
     objective would make the relative weighting arbitrary.
+
+    Budget. By default realized weights must sum to exactly 1. Integer lots at
+    market prices almost never hit that exactly, so it holds only to within
+    the solver's feasibility tolerance — and ``round_lots_greedy`` is never
+    held to it at all: it spends *at most* the portfolio value and keeps the
+    remainder as cash. ``allow_cash=True`` applies greedy's rule, sum <= 1,
+    under which greedy's answer is always feasible here, so the MIP cannot do
+    worse on tracking error. The price is that it may leave more cash, since
+    the objective counts uninvested weight only as the shortfall on targets.
+
+    ``api`` defaults to the installed cuOpt; tests pass a stand-in to solve
+    the same model without a GPU.
     """
-    api = load_cuopt()
+    api = api or load_cuopt()
     n = len(target_weights)
     prices = np.asarray(prices, dtype=np.float64)
     if len(prices) != n:
@@ -98,9 +112,9 @@ def solve_lot_rounding_cuopt(
         prob.addConstraint(dev[i] - lw * lots[i] >= -tgt, name=f"dev_pos_{i}")
         prob.addConstraint(dev[i] + lw * lots[i] >= tgt, name=f"dev_neg_{i}")
 
-    # Budget: realized weights sum to 1.
+    # Budget: realized weights sum to 1, or to at most 1 when cash is allowed.
     budget = api.LinearExpression(lots, [float(w) for w in lot_weight], 0.0)
-    prob.addConstraint(budget == 1.0, name="budget")
+    prob.addConstraint(budget <= 1.0 if allow_cash else budget == 1.0, name="budget")
 
     trade_vars: list = []
     if cost_per_share > 0.0 or max_trades is not None:
