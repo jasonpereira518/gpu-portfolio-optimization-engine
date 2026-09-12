@@ -52,38 +52,58 @@ different estimator.
 The speedup this project eventually reports will be smaller because of that
 decision. It will also be real.
 
-## Reading the solver API rather than trusting a snippet
+## Reading the solver source, not just its reference
 
-The widely-circulated cuOpt portfolio-optimization snippet has three problems
-that only show up when you check it against the actual API reference:
+The failure mode worth designing against in solver code is the silent one: a
+model that is wrong in a way that still produces a plausible portfolio. Three
+places where a naive cuOpt formulation goes wrong that way — one of which this
+project itself got wrong, and found only by reading cuOpt's source.
 
-1. `prob.Status.name` — `Status` is a plain `int` in the 26.02 release. This
-   raises `AttributeError` at the exact moment you are trying to find out
-   whether the solve succeeded.
-2. Building the budget constraint and the return term by chaining
-   `expr = expr + term` over n variables. Each `+` allocates a new expression
-   object, so model construction is quadratic in n. At 3,000 assets this
-   dominates the GPU solve it exists to feed — you would be benchmarking Python
-   object allocation and attributing the result to CUDA.
-3. Passing the covariance to `QuadraticExpression` with no statement of what
-   the matrix means.
+**The return term has to travel inside the objective.** The first version of
+`optimizer/mean_variance_cuopt.py` set each variable's linear coefficient at
+creation — `addVariable(obj=-λμᵢ)` — to avoid building a long expression, then
+passed only the quadratic risk term to `setObjective`. In cuOpt
+(`linear_programming/problem.py`, v26.02 through v26.08), `setObjective` first
+zeroes every variable's linear coefficient and then applies the expression it
+is given. The return term was discarded, so every cuOpt solve in this project
+was a minimum-variance solve. The output would have summed to one, respected
+the cap and looked diversified; nothing about it announces the error. The
+design did guard against it — the GPU parity test compares objective values at
+λ = 1, where this bug is unmissable — but that test needs a GPU and had never
+run. The fix puts the return term in the objective expression, and
+`tests/test_cuopt_formulation.py` now checks the assembled model on any machine
+against a stand-in that reproduces cuOpt's model-building semantics.
 
-Point 3 is the subtle one. Solvers split roughly evenly on whether a quadratic
-matrix denotes `xᵀQx` or `½xᵀQx`. CVXPY's `quad_form` is the former. If cuOpt
-were the latter, every cuOpt portfolio in this project would be solved at half
-the intended risk aversion — and would still look completely reasonable. Sum to
-one, respect the position cap, sensible-looking diversification. Nothing about
-the output announces the error.
+The same reading turned up a second trap: a matrix-form `QuadraticExpression`
+is added *positionally* onto a matrix over all of the problem's variables, so
+once turnover auxiliaries exist the n×n covariance has to be zero-padded to
+cover them — otherwise the solve fails on a shape mismatch.
 
-So the convention is not assumed. `optimizer/cuopt_compat.py` solves
+**Linear terms as one expression, not a chain.** Building the budget constraint
+or the return term as `expr = expr + term` over n variables allocates a new
+expression per step, so model construction is quadratic in n. At 3,000 assets
+that would dominate the GPU solve it exists to feed — benchmarking Python
+object allocation and attributing it to CUDA. Each linear term is instead one
+`LinearExpression` holding all n coefficients, and the covariance goes in as a
+single sparse matrix rather than 9M nested Python floats.
+
+**The quadratic convention is asserted, not assumed.** Solvers split on whether
+a quadratic matrix denotes `xᵀQx` or `½xᵀQx`; getting it wrong silently halves
+or doubles the effective risk aversion. NVIDIA's documentation states that cuOpt
+takes Q "without the 1/2 factor", i.e. `xᵀQx`, matching CVXPY's `quad_form`.
+`optimizer/cuopt_compat.py` still checks it at startup by solving
 
 ```
 minimize  q·x² − c·x    with q = c = 1,  x ∈ [0, 10]
 ```
 
-whose optimum is x = 0.5 under one convention and x = 1.0 under the other, and
-scales the covariance accordingly. Three lines of setup to convert a silent
-factor-of-two error into a startup assertion.
+whose optimum is x = 0.5 under one convention and x = 1.0 under the other: one
+tiny solve turns a silent factor-of-two error into a startup assertion.
+
+*Correction:* an earlier version of this section also claimed that
+`prob.Status.name` raises `AttributeError` because `Status` is a plain `int`.
+That is wrong. After a solve, `Status` holds cuOpt's termination status, an
+`IntEnum` with a `.name`; only the placeholder before a solve is a bare `-1`.
 
 ## What "the same problem" has to mean
 
@@ -104,6 +124,13 @@ memory-bandwidth advantage, but a covariance matrix accumulated in float32 loses
 about seven significant digits — enough to push a near-singular matrix indefinite
 and change the optimizer's answer. That tradeoff is worth measuring; it is not
 worth taking silently, so `dtype` is a parameter and the default matches CPU.
+
+The CPU solver is pinned for the same reason. Left alone, CVXPY picked OSQP for
+this QP. Polished OSQP turned out to be just as accurate here (objectives within
+about 1e-9 of Clarabel's), but Clarabel was about three times faster at n = 500,
+and it is an interior-point method like cuOpt's barrier QP solver. Pinning it
+makes the CPU baseline the stronger of the two options, and it stops the
+reference from changing whenever CVXPY changes its default.
 
 ## Where the two-stage design came from
 
@@ -142,44 +169,87 @@ asserts that it produces a higher Sharpe — confirming that foresight, if
 present, would in fact show up in the metric being watched. A test that cannot
 fail is not a test.
 
-## What the CPU-only results already say
+## What the CPU-only results say
 
-Mean-variance against an equal-weight benchmark, quarterly rebalance, 10 bps
-one-way costs, 756-day lookback, Ledoit-Wolf covariance. Two universes: 120 real
-S&P 500 names over 2014–2026 (`--source yfinance`), and 150 synthetic assets
-over ten years (`--source synthetic`).
+Mean-variance against equal-weight 1/N, both run through the same backtest
+engine: quarterly rebalance at the close, 10 bps one-way costs, 756-day
+lookback, Ledoit-Wolf covariance, risk aversion 2, position cap 8/n. Both are
+scored from the first rebalance, over identical dates. Two universes:
+
+- **Real:** 120 current S&P 500 names, from a pinned yfinance snapshot
+  (2014-01-02 to 2026-07-22, scored from 2017-03-31; the file's SHA-256 is in
+  `benchmarks/results/backtest/sp500-120-snapshot/backtest_config.json`).
+- **Synthetic:** 150 assets from the k-factor generator (2014-01-01 to
+  2023-08-29, scored from 2016-12-30).
 
 | | MV (real) | 1/N (real) | MV (synthetic) | 1/N (synthetic) |
 |---|---|---|---|---|
-| annualized return | 16.2% | 16.4% | 10.4% | 15.9% |
-| annualized vol | 22.8% | 17.3% | 18.0% | 17.9% |
-| Sharpe | 0.77 | 0.96 | 0.64 | 0.91 |
-| max drawdown | −36.9% | −35.8% | −25.1% | −22.2% |
-| avg turnover | 57.9% | 0% | 62.7% | 0% |
+| annualized return | 23.6% | 16.4% | 24.5% | 16.0% |
+| annualized vol | 26.6% | 18.7% | 23.9% | 17.9% |
+| Sharpe | 0.93 | 0.90 | 1.04 | 0.92 |
+| max drawdown | −36.9% | −36.5% | −27.5% | −21.8% |
+| avg turnover per rebalance | 57.9% | 9.9% | 58.3% | 17.4% |
 
-The optimizer loses on both, and on real data it loses in the specific way the
-literature predicts: it matches 1/N on return while running ~5 points *more*
-volatility, despite volatility being the thing it minimizes. That is estimation
-error in the inputs propagating straight through an optimizer that treats them
-as certain.
+On real data the optimizer earns about 7 points more return for about 8 points
+more volatility, and ends up level with 1/N on Sharpe. The 0.03 gap is noise:
+over 9.3 scored years the standard error of a Sharpe estimate is roughly 0.4.
+It gets there with six times the turnover. With risk aversion 2 applied to
+annualized means, the return term dominates this objective, so this is closer to
+return-chasing than to variance minimization. Its inputs are historical sample
+means, a famously noisy forecast, and failing to beat 1/N reliably out of sample
+is what DeMiguel, Garlappi & Uppal (2009) found for mean-variance generally.
 
-(Real-data caveat: these 120 names are current S&P 500 members, so the run
-carries survivorship bias and both columns are flattered. The comparison between
-them is still fair — both hold the same universe.) This is the expected result and it is not a bug: expected
-returns are estimated as historical sample means, which are a famously noisy
-forecast, and DeMiguel, Garlappi & Uppal (2009) is a well-known paper
-demonstrating exactly this against a naive 1/N benchmark.
+Two caveats. The 120 names are *current* S&P 500 members, so survivorship bias
+flatters both real columns, though the comparison between them is fair because
+both hold the same universe. And the synthetic win should not be read as
+evidence of anything: the generator gives each asset a constant drift, so
+historical means are informative there by construction. Synthetic data exists
+to reach universe sizes free data will not serve, not to judge the strategy.
 
 It is worth stating plainly because it separates two claims the project is
 making. The *engineering* claim is that the GPU pipeline computes the same
 answer faster. The *investment* claim would be that the answer is a good one —
-and this project does not make that claim. Reporting the loss is what keeps the
-first claim credible.
+and this project does not make that claim.
+
+### Erratum (2026-09-12)
+
+An earlier version of this section reported that the optimizer lost to 1/N on
+both universes. Two backtest bugs produced that comparison:
+
+1. **Different scoring windows.** The strategy's statistics included its
+   756-day lookback, about a quarter of the sample, spent holding nothing and
+   earning exactly zero. That deflated its annualized return and Sharpe. The
+   benchmark was a costless daily-rebalanced 1/N scored from the first price
+   row: a different period under different trading assumptions.
+2. **Missing rebalance-day returns.** On each rebalance day the engine swapped
+   in the new holdings before booking that day's return, so neither the old nor
+   the new portfolio earned it.
+
+On the same real-data snapshot with the same settings, the old engine
+reproduces the previously published figures exactly: MV 16.2% annualized,
+Sharpe 0.77, against 1/N 16.4%, Sharpe 0.96. The corrected engine gives the
+table above.
+
+The previously published synthetic column (MV Sharpe 0.64 against 0.91) could
+not be reproduced from the committed code and configuration, so it is withdrawn
+rather than explained.
+
+The fixes are structural, so the bug cannot quietly come back:
+
+- Results are scored from the first rebalance.
+- The rebalance-day return accrues to the pre-rebalance holdings, and costs are
+  charged on post-return value.
+- 1/N runs through the same engine on the same schedule, costs and universe.
+- `compare_results` refuses to put results scored over different dates side by
+  side.
+- Hand-derived tests in `tests/test_backtest.py` pin each case.
 
 ## Open items
 
 - Every GPU number. The code is written and version-shimmed; none of it has run.
   Parity first, then timings — in that order, on the same physical machine.
+  The corrected cuOpt formulation in particular is verified only against a
+  stand-in of cuOpt's model-building semantics until the GPU parity tests run.
 - The n = 50 crossover point. Expected to favor CPU; worth knowing precisely
   where it flips.
 - Whether the dense n² covariance hand-off to cuOpt's Python layer becomes the

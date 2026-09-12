@@ -15,16 +15,16 @@ reference.
 
 ## Status
 
-| Component                                                                     | State                                                        |
-| ----------------------------------------------------------------------------- | ------------------------------------------------------------ |
-| Data pipeline (yfinance + synthetic generator, Parquet cache, quality checks) | Complete, tested                                             |
-| CPU baseline (returns, rolling features, 3 covariance estimators)             | Complete, tested                                             |
-| CPU optimizer (CVXPY QP: box, budget, turnover, group caps)                   | Complete, tested                                             |
-| Backtest engine (rolling rebalance, costs, no-lookahead enforcement)          | Complete, tested                                             |
-| Benchmark harness (per-stage, warm-up separated, variance reported)           | Complete                                                     |
-| GPU pipeline (cuDF/CuPy/cuML)                                                 | Written, **not yet executed** — no CUDA host available       |
-| cuOpt QP + MIP layer                                                          | Written against the verified 26.02 API, **not yet executed** |
-| NIM explainer (stretch)                                                       | Written with an offline fallback, **not yet executed**       |
+| Component                                                                     | State                                                                                                    |
+| ----------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| Data pipeline (yfinance + synthetic generator, Parquet cache, quality checks) | Complete, tested                                                                                         |
+| CPU baseline (returns, rolling features, 3 covariance estimators)             | Complete, tested                                                                                         |
+| CPU optimizer (CVXPY + Clarabel QP: box, budget, turnover, group caps)        | Complete, tested                                                                                         |
+| Backtest engine (rolling rebalance, costs, no-lookahead, invested-window scoring) | Complete, tested                                                                                     |
+| Benchmark harness (per-stage, warm-up separated, variance reported)           | Complete                                                                                                 |
+| GPU pipeline (cuDF/CuPy/cuML)                                                 | Written, **not yet executed** — no CUDA host available                                                   |
+| cuOpt QP + MIP layer                                                          | Model assembly tested against cuOpt's model-building semantics; **not yet executed on a GPU**            |
+| NIM explainer (stretch)                                                       | Written with an offline fallback, **not yet executed**                                                   |
 
 **There are no speedup numbers in this README yet, and there will not be until
 the GPU code has actually run.** Everything above marked "not yet executed" is
@@ -115,15 +115,22 @@ portfolio still looks entirely plausible, so the bug survives inspection.
 convention at runtime by solving a one-variable problem whose answer is 0.5
 under one convention and 1.0 under the other.
 
-**3. Model construction is O(n), not O(n²).**
-The widely-circulated cuOpt portfolio snippet builds the budget constraint and
-the return term by chaining `expr = expr + term` across n variables, allocating
-n intermediate expression objects. At 3,000 assets that Python-side cost swamps
-the GPU solve it exists to feed. This implementation carries linear objective
-coefficients on the variables (`addVariable(obj=...)`) and builds the budget
-constraint as a single `LinearExpression`. Model build time is still reported
-separately from solve time in every benchmark, because the dense n² covariance
-hand-off is a real cost and hiding it inside "GPU time" would cut both ways.
+**3. The objective is built the way cuOpt actually reads it.**
+cuOpt's `Problem.setObjective` zeroes every linear objective coefficient before
+applying the expression it is given, so a return term passed as
+`addVariable(obj=...)` is silently dropped and the solve becomes minimum-variance.
+This project shipped exactly that bug until reading the solver source turned it
+up ([details](docs/case-study.md#reading-the-solver-source-not-just-its-reference)).
+The return term now travels inside the objective expression. The covariance goes
+in as one sparse matrix, zero-padded over any auxiliary variables because cuOpt
+adds a matrix-form quadratic positionally. Each linear term is a single
+`LinearExpression` rather than an `expr = expr + term` chain that allocates n
+intermediate objects. `tests/test_cuopt_formulation.py` checks the assembled
+model against a stand-in with cuOpt's model-building semantics, so the
+formulation is tested on machines without a GPU. Model build time is still
+reported separately from solve time in every benchmark, because the dense n²
+covariance hand-off is a real cost and hiding it inside "GPU time" would cut
+both ways.
 
 **4. Two-stage QP → MIP, because cuOpt's MIP solver is linear-objective and beta.**
 Forcing integrality and the quadratic risk term into one MIQP fights the tool.
@@ -141,7 +148,12 @@ backtest slices `prices.loc[:date]` before the risk model sees anything, and
 [`tests/test_backtest.py`](tests/test_backtest.py) both records the last date
 every risk model was handed (asserting it never exceeds its own rebalance date)
 _and_ runs a deliberately cheating variant to confirm that foresight would in
-fact show up — so the test cannot pass by being vacuous.
+fact show up — so the test cannot pass by being vacuous. The same structural
+approach covers scoring: every result is scored from its first rebalance,
+the equal-weight benchmark runs through the same engine on the same schedule,
+and `compare_results` refuses results scored over different dates — the fix
+for an evaluation bug an earlier version of this project had
+([erratum](docs/case-study.md#erratum-2026-09-12)).
 
 ---
 
@@ -180,7 +192,7 @@ separately rather than silently taken.
 Correctness is established before any timing is trusted:
 
 ```bash
-make test      # 47 tests; GPU tests skip cleanly off-GPU
+make test      # GPU tests skip cleanly off-GPU
 make parity    # CPU vs GPU numerical comparison
 ```
 
@@ -233,10 +245,10 @@ Results land in `benchmarks/results/` as CSVs plus an `environment.json`
 recording GPU model, driver, and every library version. Estimated cost for the
 full sweep: 10–20 GPU-hours at $0.50–1.50/hr, so roughly **$10–30**.
 
-If cuOpt's API has moved again by then, `optimizer/cuopt_compat.py` is the only
-file that should need editing — every version-sensitive lookup is isolated
-there, and it raises a message naming the docs page rather than an
-`AttributeError` deep in the optimizer.
+Version-sensitive name lookups are isolated in `optimizer/cuopt_compat.py`,
+which raises a message naming the docs page rather than an `AttributeError`
+deep in the optimizer. Behavioral changes are a different matter — the
+objective bug above was one — which is why parity runs before any timing.
 
 ---
 
@@ -249,16 +261,19 @@ Stated here rather than discovered by a reader:
   inflates returns. Fixing it properly needs point-in-time constituent data
   (CRSP/Compustat), which is not freely available.
 - **Expected returns are historical means.** This is the standard textbook
-  choice and also the standard reason mean-variance underperforms out of
-  sample: sample means are a famously noisy return forecast. The included
-  equal-weight benchmark frequently beats the optimizer on synthetic data, which
-  is the expected result (cf. DeMiguel, Garlappi & Uppal, 2009) and is reported
+  choice and also the standard reason mean-variance disappoints out of sample:
+  sample means are a famously noisy return forecast. On the real-data snapshot
+  the optimizer and a same-schedule equal-weight benchmark are level on Sharpe
+  (0.93 vs 0.90, well inside the ~0.4 standard error of a 9-year estimate),
+  with the optimizer taking about 8 points more volatility and six times the
+  turnover — consistent with DeMiguel, Garlappi & Uppal (2009), and reported
   rather than tuned away.
-- **The synthetic generator is a k-factor model**, so it is generous to
-  factor-based covariance estimators by construction. It exists to reach
-  universe sizes free data sources will not serve, and every result records
-  which source produced it; synthetic and real numbers are never mixed in one
-  table.
+- **The synthetic generator is a k-factor model with constant per-asset drift**,
+  so it is generous to factor-based covariance estimators, and it makes
+  historical means informative by construction — mean-variance "wins" there
+  for that reason alone. It exists to reach universe sizes free data sources
+  will not serve, and every result records which source produced it; synthetic
+  and real numbers are never mixed in one table.
 - **No transaction-cost model beyond linear bps.** No market impact, no bid-ask
   spread modeling, no borrow costs.
 - **Daily data only.** Nothing intraday.
