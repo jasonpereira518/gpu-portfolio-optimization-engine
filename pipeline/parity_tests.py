@@ -74,7 +74,7 @@ def compare_risk_models(cpu: RiskModel, gpu: RiskModel, tol: float = 1e-9) -> li
 
 def compare_solutions(
     cpu_sol, gpu_sol, cov: np.ndarray, mu: np.ndarray, spec: PortfolioSpec,
-    weight_tol: float = 1e-4, objective_tol: float = 1e-8,
+    weight_tol: float = 1e-4, objective_tol: float = 1e-6,
 ) -> list[ParityResult]:
     """Compare two solvers' answers to the same QP.
 
@@ -84,6 +84,12 @@ def compare_solutions(
     agree to 10 digits. The objective is the invariant; per-name weights are
     not, and asserting tight weight equality would produce false failures that
     train you to ignore the test.
+
+    ``objective_tol`` is 1e-6, not 1e-8: cuOpt's barrier QP solver converges to
+    1e-8 *relative* accuracy (NVIDIA's docs), not absolute, so the achievable
+    absolute gap scales with the objective's own magnitude. Measured on an
+    RTX 4060 at n=500 the gap ran to ~6e-8; 1e-8 absolute fails on anything
+    much above magnitude 1.
     """
     obj_cpu = objective_value(cpu_sol.weights, cov, mu, spec.risk_aversion)
     obj_gpu = objective_value(gpu_sol.weights, cov, mu, spec.risk_aversion)
