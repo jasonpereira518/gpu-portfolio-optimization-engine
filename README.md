@@ -386,6 +386,15 @@ python -m benchmarks.run_benchmarks --sizes 50 500 3000 --days 2520 --runs 5 --e
 python -m benchmarks.run_lot_rounding --sizes 50 200 500 --out benchmarks/results/<host>-lots
 ```
 
+The NIM explainer needs an endpoint rather than a GPU: NVIDIA's hosted API
+with a key from [build.nvidia.com](https://build.nvidia.com) in
+`NVIDIA_API_KEY` (read from the environment, never written to the results), or
+a local NIM container via `--endpoint`:
+
+```bash
+python -m explainer.run_explainer --out benchmarks/results/nim-hosted
+```
+
 Results land in `benchmarks/results/` as CSVs plus an `environment.json`
 recording GPU model, driver, and every library version. Estimated cost for the
 full sweep: 10–20 GPU-hours at $0.50–1.50/hr, so roughly **$10–30**.
