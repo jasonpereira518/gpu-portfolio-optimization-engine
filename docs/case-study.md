@@ -152,6 +152,14 @@ rebalance, and a greedy largest-remainder rounder is included as the baseline
 the MIP has to beat. If the MIP does not beat it, the MIP layer is not earning
 its complexity — and that is the finding.
 
+That was the finding. Run on an RTX 4060, the MIP as designed — fully
+invested — lost to greedy in 17 of 18 cases, and the fault was the budget
+rule: greedy may keep cash and the MIP may not, and a sum of integer lots at
+market prices meets 1 only to within a solver's feasibility tolerance, which
+then picks the answer. Allowed greedy's own rule, the MIP wins every case, at
+coarse lot sizes mostly by holding cash. The README's lot-rounding table and
+item 4 of "What is actually engineered here" have the numbers.
+
 ## The test that had to be adversarial
 
 Lookahead bias is the failure mode that does not announce itself. The code runs,
@@ -251,13 +259,17 @@ The fixes are structural, so the bug cannot quietly come back:
 
 ## Open items
 
-- Every GPU number. The code is written and version-shimmed; none of it has run.
-  Parity first, then timings — in that order, on the same physical machine.
-  The corrected cuOpt formulation in particular is verified only against a
-  stand-in of cuOpt's model-building semantics until the GPU parity tests run.
+- A second GPU. Every component but the NIM explainer has now run, parity
+  first, on one RTX 4060 Laptop GPU under WSL2 (see the README); a
+  data-center GPU on native Linux is the obvious next data point.
 - The n = 50 crossover point. Expected to favor CPU; worth knowing precisely
   where it flips.
 - Whether the dense n² covariance hand-off to cuOpt's Python layer becomes the
   binding constraint at n = 3,000. If model construction dominates solve time,
   the interesting engineering moves to the MPS path or a sparse formulation.
-- Whether the MIP rounding layer beats greedy largest-remainder at all.
+- A stage-2 budget rule that is neither tolerance-defined nor cash-hoarding:
+  a cash band, invested between 1 − c and 1, sits between the two rules
+  measured, and greedy's answer is feasible for it whenever greedy keeps no
+  more than c in cash.
+- A turnover cap enforced in stage 2 itself, which rounding currently
+  overshoots by up to its rounding error.

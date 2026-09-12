@@ -68,8 +68,10 @@ def solve_lot_rounding_cuopt(
 
     Budget. By default realized weights must sum to exactly 1. Integer lots at
     market prices almost never hit that exactly, so it holds only to within
-    the solver's feasibility tolerance — and ``round_lots_greedy`` is never
-    held to it at all: it spends *at most* the portfolio value and keeps the
+    the solver's feasibility tolerance, and that tolerance rather than the
+    portfolio then decides the answer (measured in the README: cuOpt and
+    HiGHS disagree by as much as 6.4%). ``round_lots_greedy`` is never held
+    to it at all: it spends *at most* the portfolio value and keeps the
     remainder as cash. ``allow_cash=True`` applies greedy's rule, sum <= 1,
     under which greedy's answer is always feasible here, so the MIP cannot do
     worse on tracking error. The price is that it may leave more cash, since

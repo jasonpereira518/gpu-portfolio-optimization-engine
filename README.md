@@ -24,17 +24,16 @@ reference.
 | Benchmark harness (per-stage, warm-up separated, variance reported)           | Complete                                                                                                 |
 | GPU pipeline (cuDF/CuPy for returns, rolling features, Ledoit-Wolf covariance) | Executed on an RTX 4060 Laptop GPU (WSL2); parity and benchmark results committed                       |
 | cuOpt QP layer (box, budget, turnover, group caps)                           | Executed on an RTX 4060 Laptop GPU (WSL2); parity-checked against CVXPY, results committed               |
-| cuOpt MIP layer (turnover lot-rounding, [`turnover_mip_cuopt.py`](optimizer/turnover_mip_cuopt.py)) | Model assembly tested off-GPU; **not yet executed on a GPU** — no test or benchmark exercises it yet |
-| cuML PCA factor covariance estimator                                         | Tested off-GPU (`--estimator pca_factor`); **not yet executed on a GPU** — parity/benchmark runs so far used Ledoit-Wolf only |
+| cuOpt MIP layer (lot rounding, [`turnover_mip_cuopt.py`](optimizer/turnover_mip_cuopt.py)) | Executed on an RTX 4060 Laptop GPU (WSL2): cuOpt QP → cuOpt MIP tested against HiGHS, formulation against brute force, sweep committed. **Does not beat greedy as shipped** — fully invested, it lost 17 of 18 cases ([why](#what-is-actually-engineered-here), item 4) |
+| cuML PCA factor covariance estimator                                         | Executed on an RTX 4060 Laptop GPU (WSL2); parity-checked against the CPU path, benchmark results committed |
 | NIM explainer (stretch)                                                       | Written with an offline fallback, **not yet executed**                                                   |
 
 GPU numbers below are from a single RTX 4060 Laptop GPU under WSL2 — see
-[docs/setup-wsl2.md](docs/setup-wsl2.md) for the bring-up sequence. Rows still
-marked "not yet executed" are code written against NVIDIA's published API and
-guarded so that it fails with an actionable message rather than silently
-falling back to CPU. Section
-"[Reproducing the GPU results](#reproducing-the-gpu-results)" is the exact
-sequence to fill in the missing rows.
+[docs/setup-wsl2.md](docs/setup-wsl2.md) for the bring-up sequence and
+"[Reproducing the GPU results](#reproducing-the-gpu-results)" for the exact
+commands. The NIM explainer, the one row still marked "not yet executed", is
+code written against NVIDIA's published API with a template fallback for when
+no endpoint is reachable.
 
 ### GPU results
 
@@ -235,6 +234,26 @@ risk-aware — so `report_drift` measures the realized volatility gap per
 rebalance, and a greedy largest-remainder rounder is included as the baseline
 the MIP has to beat. If it does not beat it, that gets reported.
 
+It does not, as shipped. On the RTX 4060 the fully-invested MIP lost to greedy
+in 17 of the 18 sweep cases and hit its 60 s limit in 8 ([table](#lot-rounding-mip-vs-greedy)).
+The budget rule, not the solver, is at fault, twice over. Greedy may keep
+cash and the fully-invested MIP may not, so the two were never solving the
+same problem. And integer lots at market prices can meet `sum(w) = 1` only to
+within a solver's feasibility tolerance, which then decides the answer: on a
+50-name book, widening the allowed budget miss from 1e-8 to 1e-7 — one cent to
+ten cents on $1M — moved HiGHS's proven optimum 5%, and cuOpt's and HiGHS's
+"optimal" fully-invested answers differ by as much as 6.4%, in both directions.
+(Under the cash-allowed rule they agree exactly.) Under greedy's
+own rule (`allow_cash=True`) cuOpt matches HiGHS's proven optimum and beats
+greedy in every case — but by 0.5% or less in four of the six single-share
+cases, and at 10- and 100-share lots largely by leaving cash uninvested, up to
+the whole book. Two more properties of the stage-2 objective, measured rather
+than assumed: moving a share toward its target cuts L1 tracking error by its
+price over the book value, more than any realistic per-share fee, so the cost
+term barely moves the answer (in the test universe it took $20 a share) and
+only `max_trades` really limits turnover; and stage 2 does not enforce stage
+1's turnover cap, which rounding can overshoot by up to the rounding error.
+
 **5. No-lookahead is enforced structurally and tested adversarially.**
 A lookahead bug does not crash; it just produces a beautiful equity curve. The
 backtest slices `prices.loc[:date]` before the risk model sees anything, and
@@ -402,13 +421,14 @@ pipeline/      risk_model.py (shared contract), cpu_baseline.py, gpu_pipeline.py
 optimizer/     spec.py (shared contract), mean_variance_cpu.py, mean_variance_cuopt.py,
                turnover_mip_cuopt.py, cuopt_compat.py (version shim)
 backtest/      engine.py, run_backtest.py
-benchmarks/    harness.py, run_benchmarks.py, render_tables.py (docs tables from results/), results/
+benchmarks/    harness.py, run_benchmarks.py, run_lot_rounding.py, render_tables.py (docs tables from results/), results/
 explainer/     nim_explainer.py
 dashboard/     app.py
 notebooks/     colab_gpu_runner.ipynb (second GPU data point on a free T4)
 docs/          case-study.md, setup-wsl2.md (Windows 11 + WSL2 GPU bring-up)
 tests/         test_data.py, test_risk_models.py, test_optimizer.py, test_backtest.py,
-               test_cuopt_formulation.py + fake_cuopt.py, test_benchmarks.py, test_render_tables.py
+               test_cuopt_formulation.py + fake_cuopt.py, test_lot_rounding.py, test_benchmarks.py,
+               test_render_tables.py
 ```
 
 ---
