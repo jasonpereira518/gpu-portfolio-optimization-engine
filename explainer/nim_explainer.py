@@ -23,6 +23,7 @@ works against any other OpenAI-compatible endpoint.
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import dataclass, field
 
@@ -145,12 +146,15 @@ def explain(
     model: str = DEFAULT_MODEL,
     temperature: float = 0.2,
     timeout: float = 60.0,
+    api_key: str | None = None,
 ) -> tuple[str, dict]:
     """Send facts to a NIM endpoint. Returns (explanation, latency/usage metrics).
 
     Latency and token counts come back alongside the text so the explainer can
     be entered in the same benchmark table as every other stage — the project
-    measures this component the way it measures the rest.
+    measures this component the way it measures the rest. ``api_key`` is sent
+    as a bearer token, which NVIDIA's hosted endpoints require and a local NIM
+    container does not.
     """
     import requests
 
@@ -163,12 +167,20 @@ def explain(
         "temperature": temperature,
         "max_tokens": 400,
     }
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
     t0 = time.perf_counter()
-    response = requests.post(endpoint, json=payload, timeout=timeout)
+    response = requests.post(endpoint, json=payload, headers=headers, timeout=timeout)
     latency = time.perf_counter() - t0
     response.raise_for_status()
     body = response.json()
+
+    choice = body["choices"][0]
+    # A reasoning model may think inside <think> tags or spend the whole token
+    # budget thinking; neither is an explanation.
+    text = re.sub(r"<think>.*?</think>", "", choice["message"].get("content") or "", flags=re.S).strip()
+    if not text:
+        raise RuntimeError(f"{model} returned no text (finish_reason={choice.get('finish_reason')})")
 
     usage = body.get("usage", {})
     metrics = {
@@ -178,7 +190,28 @@ def explain(
         "tokens_per_second": usage.get("completion_tokens", 0) / latency if latency else 0.0,
         "model": model,
     }
-    return body["choices"][0]["message"]["content"].strip(), metrics
+    return text, metrics
+
+
+# A number not glued to a word: 12.34, -2.54, 2026 — but not the 00001 in SYN00001.
+_NUMBER = re.compile(r"(?<![\w.])[-+]?\d+(?:\.\d+)?")
+
+
+def unsupported_numbers(explanation: str, facts: RebalanceFacts) -> list[str]:
+    """Numbers in an explanation that no fact supports, even after rounding.
+
+    The design rule is that the model phrases the optimizer's numbers and never
+    produces its own; this measures how often that held. A number counts as
+    supported if some number in the facts rounds to it at the precision the
+    explanation wrote, ignoring sign — a -2.54% change is a "2.5% decrease".
+    """
+    given = [abs(float(token)) for token in _NUMBER.findall(facts.to_prompt())]
+    unsupported = []
+    for token in _NUMBER.findall(explanation):
+        decimals = len(token.split(".")[1]) if "." in token else 0
+        if not any(round(value, decimals) == abs(float(token)) for value in given):
+            unsupported.append(token)
+    return unsupported
 
 
 def explain_offline(facts: RebalanceFacts) -> tuple[str, dict]:
