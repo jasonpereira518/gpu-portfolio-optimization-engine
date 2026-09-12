@@ -184,6 +184,25 @@ Only when every parity check passes:
 .venv/bin/python -m backtest.run_backtest --source synthetic --n 500 --frequency QE
 ```
 
+The PCA factor estimator is the one stage that runs cuML, so it gets its own
+parity check, then its own sweep:
+
+```bash
+.venv/bin/python -m pipeline.parity_tests --n 500 --days 2520 --estimator pca_factor
+```
+
+```bash
+.venv/bin/python -m benchmarks.run_benchmarks --sizes 50 500 3000 --days 2520 --runs 5 --estimator pca_factor --out benchmarks/results/<gpu>-wsl2-pca
+```
+
+Stage 2, the lot-rounding MIP against greedy rounding. Each of the 18 cases
+has a fully-invested solve that can run to its 60 s time limit, so allow up
+to ~20 minutes:
+
+```bash
+.venv/bin/python -m benchmarks.run_lot_rounding --sizes 50 200 500 --out benchmarks/results/<gpu>-wsl2-lots
+```
+
 Commit the results directory with its `environment.json`; the README's tables
 are generated from those files, never typed.
 

@@ -251,8 +251,10 @@ shared by CVXPY and cuOpt could not hide behind their agreement:
 - The solver's objective must not be beaten by the analytic solution.
 - Monotonicity along the efficient frontier (a sign-error canary).
 
-For CPU-vs-GPU solution comparison, the **objective value** is held to 1e-8 and
-per-name **weights** only to 1e-4 — deliberately. Mean-variance problems with
+For CPU-vs-GPU solution comparison, the **objective value** is held to 1e-6
+(cuOpt's barrier solver converges to 1e-8 *relative* accuracy, so the absolute
+gap grows with the objective) and per-name **weights** only to 1e-4 —
+deliberately. Mean-variance problems with
 many near-substitutable assets have a flat optimum, so two solvers can land on
 visibly different weight vectors whose objectives agree to ten digits. Asserting
 tight weight equality produces false failures, and a test that cries wolf is a
@@ -290,6 +292,21 @@ python -m benchmarks.run_benchmarks --sizes 50 500 3000 --days 2520 --runs 5
 
 ```bash
 python -m backtest.run_backtest --source synthetic --n 500 --frequency QE
+```
+
+The PCA factor estimator — the one stage that runs cuML rather than cuDF/CuPy —
+gets its own parity check and sweep, and stage 2 its MIP-vs-greedy comparison:
+
+```bash
+python -m pipeline.parity_tests --n 500 --days 2520 --estimator pca_factor
+```
+
+```bash
+python -m benchmarks.run_benchmarks --sizes 50 500 3000 --days 2520 --runs 5 --estimator pca_factor --out benchmarks/results/<host>-pca
+```
+
+```bash
+python -m benchmarks.run_lot_rounding --sizes 50 200 500 --out benchmarks/results/<host>-lots
 ```
 
 Results land in `benchmarks/results/` as CSVs plus an `environment.json`
