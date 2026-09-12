@@ -24,6 +24,17 @@ from pipeline.risk_model import RiskModel
 requires_cuopt = pytest.mark.skipif(not cuopt_available(), reason="cuOpt requires a CUDA host")
 
 
+def _assert_objectives_match(obj_cpu: float, obj_gpu: float) -> None:
+    """cuOpt's barrier QP solver converges to 1e-8 *relative* accuracy (NVIDIA
+    docs), not absolute, so the gap between two barrier/interior-point solves
+    scales with the objective's own magnitude. A fixed 1e-8 absolute bound
+    fails on any objective much larger than 1; measured on an RTX 4060 the
+    gap ran up to ~3e-7 on objectives of that order.
+    """
+    atol, rtol = 1e-6, 1e-6
+    assert abs(obj_cpu - obj_gpu) < atol + rtol * max(abs(obj_cpu), abs(obj_gpu))
+
+
 @pytest.fixture(scope="module")
 def model() -> RiskModel:
     prices = synthetic_prices(30, n_days=1200, seed=5).prices
@@ -164,7 +175,7 @@ def test_cuopt_matches_cvxpy_objective(model):
     cov, mu = model.nearest_psd(), model.exp_returns
     obj_cpu = objective_value(cpu.weights, cov, mu, spec.risk_aversion)
     obj_gpu = objective_value(gpu.weights, cov, mu, spec.risk_aversion)
-    assert abs(obj_cpu - obj_gpu) < 1e-8
+    _assert_objectives_match(obj_cpu, obj_gpu)
     assert gpu.check(spec) == []
 
 
@@ -186,8 +197,8 @@ def test_cuopt_matches_cvxpy_objective_with_side_constraints(model, side_constra
     gpu = solve_mean_variance_cuopt(model, spec)
 
     cov, mu = model.nearest_psd(), model.exp_returns
-    assert abs(objective_value(cpu.weights, cov, mu, spec.risk_aversion)
-               - objective_value(gpu.weights, cov, mu, spec.risk_aversion)) < 1e-8
+    _assert_objectives_match(objective_value(cpu.weights, cov, mu, spec.risk_aversion),
+                              objective_value(gpu.weights, cov, mu, spec.risk_aversion))
     assert gpu.check(spec) == []
 
 
