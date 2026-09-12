@@ -40,7 +40,28 @@ Generated from the committed files in `benchmarks/results/` by
 parity checks pass on the same machine.
 
 <!-- BEGIN GENERATED: gpu-speedup -->
-_No GPU results committed yet — see [docs/setup-wsl2.md](docs/setup-wsl2.md). This table is generated from `benchmarks/results/`, so it fills in when they are._
+**NVIDIA GeForce RTX 4060 Laptop GPU, 8188 MiB, 592.82** — `benchmarks/results/rtx4060-wsl2/`
+
+| stage | assets | CPU | GPU | speedup |
+|---|---|---|---|---|
+| h2d_transfer | 50 | — | 47.9 ms | — |
+| h2d_transfer | 500 | — | 543.1 ms | — |
+| h2d_transfer | 3000 | — | 3.72 s | — |
+| features | 50 | 10.8 ms | 378.3 ms | 0.03× |
+| features | 500 | 93.2 ms | 4.98 s | 0.02× |
+| features | 3000 | 630.6 ms | 30.54 s | 0.02× |
+| risk_model | 50 | 1.7 ms | 157.8 ms | 0.01× |
+| risk_model | 500 | 20.4 ms | 2.14 s | 0.01× |
+| risk_model | 3000 | 310.8 ms | 12.01 s | 0.03× |
+| psd_repair | 50 | 0.0 ms | 0.0 ms | 0.87× |
+| psd_repair | 500 | 0.6 ms | 0.3 ms | 1.90× |
+| psd_repair | 3000 | 57.7 ms | 59.4 ms | 0.97× |
+| solve | 50 | 3.9 ms | 81.5 ms | 0.05× |
+| solve | 500 | 142.3 ms | 242.3 ms | 0.59× |
+| solve | 3000 | 5.96 s | 2.41 s | 2.48× |
+| solve_cvxpy | 50 | 3.9 ms | 61.1 ms | 0.06× |
+| solve_cvxpy | 500 | 142.3 ms | 288.2 ms | 0.49× |
+| solve_cvxpy | 3000 | 5.96 s | 4.77 s | 1.25× |
 <!-- END GENERATED: gpu-speedup -->
 
 ---
