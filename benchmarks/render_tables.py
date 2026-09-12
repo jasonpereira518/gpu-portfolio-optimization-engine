@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import statistics
 import sys
 from pathlib import Path
 
@@ -223,6 +224,48 @@ def lot_rounding_tables(results: Path) -> str:
     return "\n\n".join(sections)
 
 
+def nim_explainer_tables(results: Path) -> str:
+    """The NIM explainer against a real endpoint, one table per recorded run."""
+    sections = []
+    for run_dir in sorted(p for p in results.iterdir() if p.is_dir()):
+        record_json = run_dir / "explanations.json"
+        if not record_json.exists():
+            continue
+        record = json.loads(record_json.read_text())
+        runs = record["runs"]
+        answered = [run for run in runs if "explanation" in run]
+        hosted = "integrate.api.nvidia.com" in record["endpoint"]
+        lines = [
+            f"**{record['model']}** — {'NVIDIA hosted API' if hosted else '`' + record['endpoint'] + '`'} "
+            f"— `benchmarks/results/{run_dir.name}/`",
+            "",
+            "| calls answered | median latency | median tokens/s | replies with numbers the facts don't support |",
+            "|---|---|---|---|",
+        ]
+        if not answered:
+            lines.append(f"| 0 of {len(runs)} | — | — | — |")
+        else:
+            flagged = [run for run in answered if run["unsupported_numbers"]]
+            numbers = sorted({n for run in flagged for n in run["unsupported_numbers"]})
+            unsupported = f"{len(flagged)} of {len(answered)}"
+            if numbers:
+                unsupported += " (" + ", ".join(numbers) + ")"
+            lines += [
+                f"| {len(answered)} of {len(runs)} "
+                f"| {_seconds(statistics.median(run['latency_s'] for run in answered))} "
+                f"| {statistics.median(run['tokens_per_second'] for run in answered):.0f} "
+                f"| {unsupported} |",
+                "",
+                "> " + answered[0]["explanation"].replace("\n", " "),
+            ]
+        sections.append("\n".join(lines))
+    if not sections:
+        return ("_No NIM explainer results committed yet — run `python -m explainer.run_explainer` "
+                "against an endpoint. This table is generated from `benchmarks/results/`, so it fills "
+                "in when they are._")
+    return "\n\n".join(sections)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true", help="fail instead of writing if stale")
@@ -232,6 +275,7 @@ def main() -> int:
         "backtest-summary": backtest_table(RESULTS, BACKTESTS),
         "gpu-speedup": speedup_tables(RESULTS),
         "lot-rounding": lot_rounding_tables(RESULTS),
+        "nim-explainer": nim_explainer_tables(RESULTS),
     }
     unused = [name for name in blocks
               if not any(_markers(name)[0] in doc.read_text() for doc in DOCS)]

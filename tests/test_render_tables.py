@@ -11,6 +11,7 @@ from benchmarks.render_tables import (
     StaleBlocks,
     backtest_table,
     lot_rounding_tables,
+    nim_explainer_tables,
     replace_block,
     speedup_tables,
     sync_file,
@@ -179,6 +180,29 @@ def test_lot_rounding_table_never_rounds_a_loss_into_a_tie(tmp_path):
     row = [line for line in lot_rounding_tables(tmp_path).splitlines() if line.startswith("| 50 |")][0]
 
     assert "(0.2% worse)" in row and "(2.2% better)" in row
+
+
+def test_nim_table_reports_latency_throughput_and_unsupported_numbers(tmp_path):
+    run = tmp_path / "nim-hosted"
+    run.mkdir()
+    (run / "explanations.json").write_text(json.dumps({
+        "endpoint": "https://integrate.api.nvidia.com/v1/chat/completions", "model": "some/model",
+        "runs": [
+            {"latency_s": 1.0, "tokens_per_second": 80.0, "explanation": "First.", "unsupported_numbers": []},
+            {"latency_s": 3.0, "tokens_per_second": 60.0, "explanation": "Second.", "unsupported_numbers": ["0.57"]},
+            {"error": "HTTPError: 429 Too Many Requests"},
+        ],
+    }))
+
+    text = nim_explainer_tables(tmp_path)
+
+    assert "**some/model** — NVIDIA hosted API — `benchmarks/results/nim-hosted/`" in text
+    assert "| 2 of 3 | 2.00 s | 70 | 1 of 2 (0.57) |" in text
+    assert "> First." in text
+
+
+def test_nim_table_says_so_when_nothing_has_run(tmp_path):
+    assert "No NIM explainer results" in nim_explainer_tables(tmp_path)
 
 
 def test_lot_rounding_table_skips_hosts_that_only_ran_greedy(tmp_path):

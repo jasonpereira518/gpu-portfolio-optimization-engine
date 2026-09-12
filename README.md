@@ -126,6 +126,17 @@ band" (invested between 99.5% and 100%).
 † hit the time limit: the best solution found is shown, not a proven optimum.
 <!-- END GENERATED: lot-rounding -->
 
+### NIM explainer
+
+The explainer turns the optimizer's facts about a rebalance into a few plain
+sentences; the model is never asked to compute anything. Each run below asks a
+NIM-served model to explain one real rebalance several times, and counts the
+replies containing a number that no fact supports, even after rounding.
+
+<!-- BEGIN GENERATED: nim-explainer -->
+_No NIM explainer results committed yet — run `python -m explainer.run_explainer` against an endpoint. This table is generated from `benchmarks/results/`, so it fills in when they are._
+<!-- END GENERATED: nim-explainer -->
+
 ---
 
 ## Quick start (CPU, no GPU required)
