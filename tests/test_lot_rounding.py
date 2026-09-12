@@ -126,6 +126,23 @@ def test_mip_optimum_matches_brute_force(allow_cash, case):
         assert solution.n_trades <= max_trades
 
 
+def test_a_trade_limit_can_always_keep_the_current_book():
+    """Trading nothing is a legal answer whenever cash is allowed. C and D are
+    targeted at zero but held, so a position bound derived from targets alone
+    would force a trade in both — two trades against a limit of one — and
+    report a problem with an obvious answer as infeasible."""
+    prices = np.array([70.0, 45.0, 30.0, 25.0])
+    target = np.array([0.50, 0.50, 0.0, 0.0])
+    prev_shares = np.array([3.0, 8.0, 5.0, 4.0])
+
+    solution = solve_lot_rounding_cuopt(target, prices, VALUE, prev_shares=prev_shares, max_trades=1,
+                                        allow_cash=True, api=FAKE_API)
+
+    assert solution.n_trades <= 1
+    want = _brute_force(target, prices, VALUE, 1, True, prev_shares=prev_shares, max_trades=1)
+    assert _objective(solution, VALUE) == pytest.approx(want, abs=1e-6)
+
+
 def test_a_mip_without_a_solution_raises_instead_of_returning_nan_holdings():
     """One asset whose lot is 30% of the book cannot be exactly 100% invested.
 

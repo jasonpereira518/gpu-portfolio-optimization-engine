@@ -93,9 +93,13 @@ def solve_lot_rounding_cuopt(
 
     # Weight contributed by one lot of asset i.
     lot_weight = (prices * lot_size) / portfolio_value
+    prev_lots = prev_shares / lot_size
     # Upper bound: no position may exceed twice its target (plus a lot of slack
-    # for tiny targets), which keeps the integer search space bounded.
+    # for tiny targets), which keeps the integer search space bounded — except
+    # that the current holding is always allowed, so trading nothing stays a
+    # feasible answer however tight the trade limit.
     max_lots = np.maximum(np.ceil(2.0 * target_weights / np.maximum(lot_weight, 1e-12)), 1.0)
+    max_lots = np.maximum(max_lots, np.ceil(prev_lots))
 
     lots = [
         prob.addVariable(lb=0.0, ub=float(max_lots[i]), vtype=api.VType.INTEGER, name=f"n_{i}")
@@ -118,7 +122,6 @@ def solve_lot_rounding_cuopt(
 
     trade_vars: list = []
     if cost_per_share > 0.0 or max_trades is not None:
-        prev_lots = prev_shares / lot_size
         for i in range(n):
             t = prob.addVariable(
                 lb=0.0, ub=float(max_lots[i]) + abs(float(prev_lots[i])), name=f"t_{i}"
