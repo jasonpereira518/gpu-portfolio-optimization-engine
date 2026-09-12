@@ -28,13 +28,17 @@ from pathlib import Path
 import numpy as np
 
 from data.universe import synthetic_prices
-from explainer.nim_explainer import build_facts, explain, explain_offline, unsupported_numbers
+from explainer.nim_explainer import (
+    DEFAULT_ENDPOINT,
+    DEFAULT_MODEL,
+    build_facts,
+    explain,
+    explain_offline,
+    unsupported_numbers,
+)
 from optimizer.mean_variance_cpu import solve_mean_variance_cpu
 from optimizer.spec import PortfolioSpec
 from pipeline.cpu_baseline import build_risk_model
-
-HOSTED_ENDPOINT = "https://integrate.api.nvidia.com/v1/chat/completions"
-HOSTED_MODEL = "nvidia/nemotron-nano-3-30b-a3b"
 
 
 def rebalance_facts(n_assets: int = 40, seed: int = 3, cost_bps: float = 10.0):
@@ -52,14 +56,14 @@ def rebalance_facts(n_assets: int = 40, seed: int = 3, cost_bps: float = 10.0):
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--endpoint", default=HOSTED_ENDPOINT)
-    parser.add_argument("--model", default=HOSTED_MODEL)
+    parser.add_argument("--endpoint", default=DEFAULT_ENDPOINT)
+    parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--runs", type=int, default=5)
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args(argv)
 
     api_key = os.environ.get("NVIDIA_API_KEY")
-    if args.endpoint == HOSTED_ENDPOINT and not api_key:
+    if args.endpoint == DEFAULT_ENDPOINT and not api_key:
         print("NVIDIA's hosted endpoint needs a key: set NVIDIA_API_KEY in this shell "
               "(from build.nvidia.com), or pass --endpoint for a local NIM.", file=sys.stderr)
         return 2

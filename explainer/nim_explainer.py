@@ -3,21 +3,20 @@
 Scope is deliberately small. This is an explanation layer over a real
 optimization engine, not the point of the project. It takes structured facts
 that the optimizer already computed — which constraints bound, which positions
-moved, where risk concentrated — and asks a local model to phrase them.
+moved, where risk concentrated — and asks a NIM-served model to phrase them.
 
 Design constraint that matters: **the model is never asked to compute
 anything.** Every number in the prompt is produced by the optimizer and passed
 in as text. An LLM asked to derive risk contributions would produce fluent
 arithmetic errors, and the resulting explanation would be worse than none.
+``unsupported_numbers`` measures how well a model keeps to that.
 
-Run a NIM locally (single GPU is enough for Nemotron Nano):
-
-    docker run --gpus all -p 8000:8000 \\
-        -e NGC_API_KEY=$NGC_API_KEY \\
-        nvcr.io/nim/nvidia/nemotron-3-nano-instruct:latest
-
-The client below speaks the OpenAI-compatible API that NIM exposes, so it also
-works against any other OpenAI-compatible endpoint.
+The default endpoint is NVIDIA's hosted API (a key from build.nvidia.com,
+passed as ``api_key``). The client speaks the OpenAI-compatible API that NIM
+exposes, so a self-hosted NIM container or any other compatible endpoint works
+through ``endpoint``. Self-hosting is not an option on this project's 8 GB
+RTX 4060: the Nemotron 3 Nano NIM (``nvcr.io/nim/nvidia/nemotron-3-nano``) is
+a 30B-parameter model, and NVIDIA validates no LLM NIM on an 8 GB GPU.
 """
 
 from __future__ import annotations
@@ -29,8 +28,12 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-DEFAULT_ENDPOINT = "http://localhost:8000/v1/chat/completions"
-DEFAULT_MODEL = "nvidia/nemotron-3-nano-instruct"
+DEFAULT_ENDPOINT = "https://integrate.api.nvidia.com/v1/chat/completions"
+# Nemotron 3.5 Lightning: its model card lists plain instruction following,
+# and with thinking switched off (see explain) the whole token budget goes to
+# the answer. The name this file used to carry, nemotron-3-nano-instruct, was
+# never a NIM model.
+DEFAULT_MODEL = "nvidia/nemotron-3.5-lightning-30b-a3b"
 
 SYSTEM_PROMPT = """You explain portfolio rebalances to an investment committee.
 
@@ -166,6 +169,11 @@ def explain(
         ],
         "temperature": temperature,
         "max_tokens": 400,
+        # One complete JSON reply (NVIDIA's hosted API streams by default), and
+        # no thinking: Nemotron 3 models think by default and that counts
+        # against max_tokens, so a 400-token budget can end before any answer.
+        "stream": False,
+        "chat_template_kwargs": {"enable_thinking": False},
     }
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
@@ -176,6 +184,8 @@ def explain(
     body = response.json()
 
     choice = body["choices"][0]
+    if choice.get("finish_reason") == "length":
+        raise RuntimeError(f"{model}'s reply was cut off at max_tokens")
     # A reasoning model may think inside <think> tags or spend the whole token
     # budget thinking; neither is an explanation.
     text = re.sub(r"<think>.*?</think>", "", choice["message"].get("content") or "", flags=re.S).strip()

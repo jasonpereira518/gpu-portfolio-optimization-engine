@@ -73,6 +73,25 @@ def test_explain_sends_the_optimizer_facts_and_returns_the_reply_with_its_cost(e
     assert metrics["latency_s"] > 0
 
 
+def test_explain_asks_for_one_complete_answer_without_thinking(endpoint):
+    """Nemotron 3 models think by default, and thinking counts against
+    max_tokens — 400 tokens can be spent before any answer; the hosted API
+    also streams unless told not to."""
+    explain(FACTS, endpoint=endpoint.url)
+
+    sent = endpoint.requests[0]["body"]
+    assert sent["stream"] is False
+    assert sent["chat_template_kwargs"] == {"enable_thinking": False}
+
+
+def test_a_reply_cut_off_at_max_tokens_is_an_error(endpoint):
+    endpoint.reply["choices"][0]["message"]["content"] = "On 2026-06-30 the portfolio was re-optimized and"
+    endpoint.reply["choices"][0]["finish_reason"] = "length"
+
+    with pytest.raises(RuntimeError, match="cut off"):
+        explain(FACTS, endpoint=endpoint.url)
+
+
 def test_explain_authenticates_only_when_given_a_key(endpoint):
     explain(FACTS, endpoint=endpoint.url, api_key="not-a-real-key")
     explain(FACTS, endpoint=endpoint.url)
