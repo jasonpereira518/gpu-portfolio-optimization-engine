@@ -22,6 +22,7 @@ import re
 import sys
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -105,8 +106,19 @@ def _seconds(value: float) -> str:
     return f"{value:.2f} s" if value >= 1.0 else f"{value * 1e3:.1f} ms"
 
 
+def _estimators(host: Path) -> list[str]:
+    """Covariance estimator(s) a sweep ran with, as recorded in its raw timings."""
+    raw_csv = host / "timings_raw.csv"
+    if not raw_csv.exists():
+        return []
+    raw = pd.read_csv(raw_csv)
+    if "extra_estimator" not in raw:
+        return []
+    return sorted(raw["extra_estimator"].dropna().unique())
+
+
 def speedup_tables(results: Path) -> str:
-    """One table per GPU host whose sweep results are committed."""
+    """One table per GPU sweep whose results are committed."""
     sections = []
     for host in sorted(p for p in results.iterdir() if p.is_dir() and p.name != "backtest"):
         table_csv, env_json = host / "speedup_table.csv", host / "environment.json"
@@ -119,8 +131,10 @@ def speedup_tables(results: Path) -> str:
         table["order"] = table["stage"].map(
             {s: i for i, s in enumerate(STAGE_ORDER)}).fillna(len(STAGE_ORDER))
         table = table.sort_values(["order", "n_assets"])
+        # One GPU can have several sweeps (e.g. per estimator); say which this is.
+        estimator = "".join(f" `{e}` covariance —" for e in _estimators(host))
         lines = [
-            f"**{env.get('gpu', 'unknown GPU')}** — `benchmarks/results/{host.name}/`",
+            f"**{env.get('gpu', 'unknown GPU')}** —{estimator} `benchmarks/results/{host.name}/`",
             "",
             "| stage | assets | CPU | GPU | speedup |",
             "|---|---|---|---|---|",
@@ -136,6 +150,76 @@ def speedup_tables(results: Path) -> str:
     return "\n\n".join(sections)
 
 
+LOT_MIP_METHODS = ("mip_fully_invested", "mip_cash_allowed")
+
+
+def _pct_of_book(value: float) -> str:
+    if pd.isna(value):
+        return "—"
+    pct = value * 100
+    if abs(pct) >= 10:
+        return f"{pct:.0f}%"
+    return f"{pct:.2g}%" if abs(pct) >= 1e-3 else "0%"
+
+
+def _mip_cell(row, greedy_error: float) -> str:
+    """A MIP's tracking error, and how it compares with greedy's.
+
+    Stated as "x% better/worse" rather than a ratio: at two decimals a 0.2%
+    loss prints as 1.00×, indistinguishable from a win.
+    """
+    if row is None or pd.isna(row["tracking_error"]):
+        return "no solution"
+    change = (row["tracking_error"] / greedy_error - 1.0) * 100
+    versus = "same" if change == 0 else f"{abs(change):.2g}% {'worse' if change > 0 else 'better'}"
+    cell = f"{_pct_of_book(row['tracking_error'])} ({versus})"
+    return cell + " †" if row["status"] == "FeasibleFound" else cell
+
+
+def lot_rounding_tables(results: Path) -> str:
+    """MIP lot rounding against greedy, one table per GPU host that ran it."""
+    sections = []
+    for host in sorted(p for p in results.iterdir() if p.is_dir()):
+        rows_csv, env_json = host / "lot_rounding.csv", host / "environment.json"
+        if not (rows_csv.exists() and env_json.exists()):
+            continue
+        rows = pd.read_csv(rows_csv)
+        if not set(LOT_MIP_METHODS) & set(rows["method"]):
+            continue  # greedy alone is a baseline, not a comparison
+        env = json.loads(env_json.read_text())
+        lines = [
+            f"**{env.get('gpu', 'unknown GPU')}** — ${rows['portfolio_value'].iloc[0] / 1e6:g}M book "
+            f"— `benchmarks/results/{host.name}/`",
+            "",
+            "| assets | turnover cap | lot | greedy | MIP, fully invested | MIP, cash allowed "
+            "| cash left: greedy / MIP, cash allowed | MIP solve: fully invested / cash allowed |",
+            "|---|---|---|---|---|---|---|---|",
+        ]
+        time_limited = False
+        rows["cap"] = rows["turnover_budget"].fillna(-1.0)  # uncapped sorts first
+        for (n, cap, lot), case in rows.groupby(["n_assets", "cap", "lot_size"]):
+            by = {r["method"]: r for _, r in case.iterrows()}
+            greedy = by["greedy"]
+            full, cash = by.get("mip_fully_invested"), by.get("mip_cash_allowed")
+            mips = [_mip_cell(full, greedy["tracking_error"]), _mip_cell(cash, greedy["tracking_error"])]
+            time_limited |= any(cell.endswith("†") for cell in mips)
+            cash_left = _pct_of_book(np.nan if cash is None else cash["cash"])
+            solve = [_seconds(np.nan if r is None else r["solve_s"]) for r in (full, cash)]
+            lines.append(
+                f"| {n} | {'none' if cap < 0 else f'{cap:.2f}'} | {lot} | "
+                f"{_pct_of_book(greedy['tracking_error'])} | {mips[0]} | {mips[1]} | "
+                f"{_pct_of_book(greedy['cash'])} / {cash_left} | {solve[0]} / {solve[1]} |"
+            )
+        if time_limited:
+            lines += ["", "† hit the time limit: the best solution found is shown, not a proven optimum."]
+        sections.append("\n".join(lines))
+    if not sections:
+        return ("_No lot-rounding results committed yet — run `benchmarks.run_lot_rounding` on a GPU "
+                "host (see [docs/setup-wsl2.md](docs/setup-wsl2.md)). This table is generated from "
+                "`benchmarks/results/`, so it fills in when they are._")
+    return "\n\n".join(sections)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true", help="fail instead of writing if stale")
@@ -144,6 +228,7 @@ def main() -> int:
     blocks = {
         "backtest-summary": backtest_table(RESULTS, BACKTESTS),
         "gpu-speedup": speedup_tables(RESULTS),
+        "lot-rounding": lot_rounding_tables(RESULTS),
     }
     unused = [name for name in blocks
               if not any(_markers(name)[0] in doc.read_text() for doc in DOCS)]

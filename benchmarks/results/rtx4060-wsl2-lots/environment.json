@@ -1,0 +1,15 @@
+{
+  "platform": "Linux-6.18.33.2-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+  "processor": "x86_64",
+  "python": "3.12.3",
+  "timestamp": "2026-09-12T17:33:48-0400",
+  "numpy": "2.4.6",
+  "blas": "scipy-openblas",
+  "cupy": "14.2.0",
+  "cudf": "26.08.01",
+  "cuml": "26.08.00",
+  "cuopt": "26.08.00",
+  "cvxpy": "1.9.2",
+  "gpu": "NVIDIA GeForce RTX 4060 Laptop GPU, 8188 MiB, 592.82",
+  "gpu_state": "pstate, clocks.current.sm [MHz], clocks.max.sm [MHz], clocks.current.memory [MHz], power.limit [W], pcie.link.gen.current, pcie.link.width.current | P0, 2250 MHz, 3105 MHz, 8000 MHz, [N/A], 4, 8"
+}

@@ -14,7 +14,13 @@ from pipeline.cpu_baseline import (
     pca_factor_covariance,
     sample_covariance,
 )
+from pipeline.gpu_pipeline import rapids_available
 from pipeline.risk_model import TRADING_DAYS
+
+requires_rapids = pytest.mark.skipif(not rapids_available(), reason="cuDF/CuPy require a CUDA host")
+
+# Same absolute bound pipeline.parity_tests holds the GPU covariance to.
+GPU_COV_ATOL = 1e-9
 
 
 @pytest.fixture(scope="module")
@@ -130,3 +136,44 @@ def test_nearest_psd_clips_negative_eigenvalues():
     cov = np.array([[1.0, 2.0], [2.0, 1.0]])  # eigenvalues 3 and -1
     model = RiskModel(np.zeros(2), cov, ["a", "b"], "sample", "cpu")
     assert np.linalg.eigvalsh(model.nearest_psd()).min() >= -1e-12
+
+
+# ---------------------------------------------------------------------------
+# GPU parity — skipped off-GPU
+# ---------------------------------------------------------------------------
+
+@requires_rapids
+@pytest.mark.parametrize("estimator", ["sample", "ledoit_wolf", "pca_factor"])
+def test_gpu_risk_model_matches_cpu(prices, estimator):
+    """Each GPU estimator mirrors its CPU twin line for line, so anything beyond
+    float-reordering noise is a formula, ddof or dtype mismatch. pca_factor
+    runs through cuML's PCA here, which the parity and benchmark runs had not
+    exercised: they all used Ledoit-Wolf, which is CuPy only."""
+    from pipeline.gpu_pipeline import build_risk_model_gpu, load_rapids
+
+    if estimator == "pca_factor":
+        # load_rapids() falls back to a CuPy SVD when cuML won't import, so
+        # without this the test could pass having never touched cuML.
+        assert load_rapids()[2] is not None, "cuML did not import; pca_factor would use the CuPy fallback"
+
+    cpu = build_risk_model(prices, estimator=estimator)
+    gpu = build_risk_model_gpu(prices, estimator=estimator)
+
+    assert gpu.tickers == cpu.tickers
+    np.testing.assert_allclose(gpu.exp_returns, cpu.exp_returns, rtol=0, atol=GPU_COV_ATOL)
+    np.testing.assert_allclose(gpu.cov, cpu.cov, rtol=0, atol=GPU_COV_ATOL)
+
+
+@requires_rapids
+def test_gpu_pca_factor_fallback_without_cuml_matches_cpu(prices, monkeypatch):
+    """The CuPy SVD path taken when cuML is missing must give the same factor
+    covariance, not a quietly different risk model."""
+    import pipeline.gpu_pipeline as gpu_pipeline
+
+    cudf, cupy, _ = gpu_pipeline.load_rapids()
+    monkeypatch.setattr(gpu_pipeline, "load_rapids", lambda: (cudf, cupy, None))
+
+    cpu = build_risk_model(prices, estimator="pca_factor")
+    gpu = gpu_pipeline.build_risk_model_gpu(prices, estimator="pca_factor")
+
+    np.testing.assert_allclose(gpu.cov, cpu.cov, rtol=0, atol=GPU_COV_ATOL)

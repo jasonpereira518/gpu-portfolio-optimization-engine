@@ -5,10 +5,12 @@ GeForce RTX card, that means WSL2. This is the sequence that takes a clean
 machine to parity-checked GPU numbers, in the order that keeps each step's
 failure easy to diagnose.
 
-> **Verified on:** _not yet — fill in after the first successful run_
-> (GPU, driver, Windows build, WSL kernel, Ubuntu release). Until this line is
-> filled in, treat every command below as the documented procedure, not a
-> tested one.
+> **Verified on** 2026-09-12: NVIDIA GeForce RTX 4060 Laptop GPU (8 GB),
+> driver 592.82 (CUDA 13.3), Intel Core i7-13700HX, WSL2 kernel
+> 6.18.33.2 with 20 GB of memory, glibc 2.39 (Ubuntu 24.04), Python 3.12.3,
+> cuDF 26.08.01 / cuML 26.08.00 / cuOpt 26.08.00 — the whole run order below,
+> parity first; results are in `benchmarks/results/rtx4060-wsl2*/`. The
+> Windows build was not recorded.
 
 ## What WSL2 does and does not give you
 
@@ -182,6 +184,25 @@ Only when every parity check passes:
 
 ```bash
 .venv/bin/python -m backtest.run_backtest --source synthetic --n 500 --frequency QE
+```
+
+The PCA factor estimator is the one stage that runs cuML, so it gets its own
+parity check, then its own sweep:
+
+```bash
+.venv/bin/python -m pipeline.parity_tests --n 500 --days 2520 --estimator pca_factor
+```
+
+```bash
+.venv/bin/python -m benchmarks.run_benchmarks --sizes 50 500 3000 --days 2520 --runs 5 --estimator pca_factor --out benchmarks/results/<gpu>-wsl2-pca
+```
+
+Stage 2, the lot-rounding MIP against greedy rounding. Each of the 18 cases
+has a fully-invested solve that can run to its 60 s time limit, so allow up
+to ~20 minutes:
+
+```bash
+.venv/bin/python -m benchmarks.run_lot_rounding --sizes 50 200 500 --out benchmarks/results/<gpu>-wsl2-lots
 ```
 
 Commit the results directory with its `environment.json`; the README's tables

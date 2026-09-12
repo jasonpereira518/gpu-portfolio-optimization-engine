@@ -13,18 +13,50 @@ appear in NVIDIA/cuopt v26.08.00
   with ``+`` (an ndarray there would be added elementwise instead).
 
 The objective the solver would receive is exposed as ``linear_objective`` (c)
-and ``quadratic_objective`` (Q, dense). Nothing is solved: the GPU parity
-tests remain the ground truth for what cuOpt returns.
+and ``quadratic_objective`` (Q, dense). Quadratic models are never solved
+here: the GPU parity tests remain the ground truth for what cuOpt returns.
+*Linear* models — the lot-rounding MIP — can be: ``Problem.solve`` hands them
+to HiGHS (``scipy.optimize.milp``) at a zero optimality gap, so the model the
+optimizer builds is checked end to end on any machine, and a GPU test has a
+proven optimum to hold cuOpt's MIP answer against.
 """
 
 from __future__ import annotations
 
+import time
+from enum import IntEnum
+
 import numpy as np
+from scipy.optimize import Bounds, LinearConstraint, milp
 from scipy.sparse import coo_matrix
 
 from optimizer.cuopt_compat import CuOptApi
 
 MINIMIZE, MAXIMIZE = "minimize", "maximize"
+
+
+class VType:
+    CONTINUOUS = "CONTINUOUS"
+    INTEGER = "INTEGER"
+
+
+class SolverSettings:
+    def __init__(self) -> None:
+        self.parameters: dict[str, float] = {}
+
+    def set_parameter(self, name: str, value) -> None:
+        self.parameters[name] = value
+
+
+class MILPTerminationStatus(IntEnum):
+    """cuOpt 26.08's values (cpp/include/cuopt/mathematical_optimization/constants.h)."""
+
+    NoTermination = 0
+    Optimal = 1
+    Infeasible = 2
+    Unbounded = 3
+    TimeLimit = 5  # hit the limit with no incumbent
+    FeasibleFound = 8  # hit the limit holding an incumbent
 
 
 class Constraint:
@@ -72,9 +104,14 @@ class Variable:
         self._index = index
         self.lb, self.ub, self.vtype, self.name = lb, ub, vtype, name
         self._obj = float(obj)
+        self._value = float("nan")
 
     def getIndex(self) -> int:
         return self._index
+
+    def getValue(self) -> float:
+        # Like cuOpt 26.08: NaN, not an exception, when there is no solution.
+        return self._value
 
     def getObjectiveCoefficient(self) -> float:
         return self._obj
@@ -180,14 +217,57 @@ class Problem:
     def linear_objective(self) -> np.ndarray:
         return np.array([v.getObjectiveCoefficient() for v in self.vars])
 
+    def solve(self, settings: SolverSettings | None = None) -> None:
+        """Solve a linear model with HiGHS to a proven optimum (zero MIP gap)."""
+        if self.quadratic_objective is not None and np.any(self.quadratic_objective):
+            raise NotImplementedError("the stand-in solves linear models only")
+        rows, cols, vals, lower, upper = [], [], [], [], []
+        for row, (_, con) in enumerate(self.constraints):
+            for var, coeff in zip(con.expr.vars, con.expr.coefficients):
+                rows.append(row)
+                cols.append(var.getIndex())
+                vals.append(float(coeff))
+            rhs = con.rhs - con.expr.constant
+            lower.append(rhs if con.sense in (">=", "==") else -np.inf)
+            upper.append(rhs if con.sense in ("<=", "==") else np.inf)
+        # coo -> csr sums repeated (row, col) entries, as a solver reads them.
+        a = coo_matrix((vals, (rows, cols)), shape=(len(self.constraints), self.NumVariables)).tocsr()
+        sign = -1.0 if self.sense == MAXIMIZE else 1.0
+        time_limit = float((settings.parameters if settings else {}).get("time_limit", 60.0))
+
+        t0 = time.perf_counter()
+        result = milp(
+            sign * self.linear_objective,
+            constraints=LinearConstraint(a, lower, upper) if self.constraints else None,
+            integrality=[1 if v.vtype == VType.INTEGER else 0 for v in self.vars],
+            bounds=Bounds([v.lb for v in self.vars], [v.ub for v in self.vars]),
+            # Presolve off: on a 40-name lot-rounding model with transaction
+            # costs, HiGHS's presolve (as bundled with scipy 1.18) returned an
+            # answer 2% worse than a known feasible point and called it
+            # optimal. A reference has to be right before it is fast.
+            options={"time_limit": time_limit, "mip_rel_gap": 0.0, "presolve": False},
+        )
+        self.SolveTime = time.perf_counter() - t0
+
+        found = result.x is not None
+        self.Status = {
+            0: MILPTerminationStatus.Optimal,
+            1: MILPTerminationStatus.FeasibleFound if found else MILPTerminationStatus.TimeLimit,
+            2: MILPTerminationStatus.Infeasible,
+            3: MILPTerminationStatus.Unbounded,
+        }.get(result.status, MILPTerminationStatus.NoTermination)
+        self.ObjValue = sign * float(result.fun) if found else float("nan")
+        for var, value in zip(self.vars, result.x if found else [float("nan")] * self.NumVariables):
+            var._value = float(value)
+
 
 FAKE_API = CuOptApi(
     Problem=Problem,
     QuadraticExpression=QuadraticExpression,
     LinearExpression=LinearExpression,
     Constraint=Constraint,
-    SolverSettings=object,
-    VType=None,
+    SolverSettings=SolverSettings,
+    VType=VType,
     CType=None,
     MINIMIZE=MINIMIZE,
     MAXIMIZE=MAXIMIZE,
