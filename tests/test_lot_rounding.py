@@ -19,11 +19,18 @@ import numpy as np
 import pytest
 
 from data.universe import synthetic_prices
+from optimizer.cuopt_compat import cuopt_available
 from optimizer.mean_variance_cpu import solve_mean_variance_cpu
 from optimizer.spec import PortfolioSpec
 from optimizer.turnover_mip_cuopt import round_lots_greedy, solve_lot_rounding_cuopt
 from pipeline.cpu_baseline import build_risk_model
 from tests.fake_cuopt import FAKE_API
+
+requires_cuopt = pytest.mark.skipif(not cuopt_available(), reason="cuOpt requires a CUDA host")
+
+# cuOpt stops a MIP once it is within mip_relative_gap (default 1e-4) of its
+# bound; the HiGHS reference solves to a zero gap. Twice the gap covers both.
+MIP_RTOL = 2e-4
 
 # Three assets whose answers can be worked out with a pencil: one lot of each
 # is 10%, 5% and 2% of a 1,000 portfolio, and the ideal holdings are 4.3, 6.2
@@ -63,16 +70,30 @@ def _objective(solution, value):
     return solution.tracking_error + solution.transaction_cost / value
 
 
+BOOK = 1e6  # portfolio value for the realistic-scale cases
+
+
 @pytest.fixture(scope="module")
-def rebalance():
-    """A rebalance at the scale the MIP meets in practice: 40 names, a $1M book
-    held equal-weight in whole shares, and a turnover-capped QP target."""
+def universe():
+    """40 synthetic names (last prices $10-$5,000) and their risk model."""
     prices = synthetic_prices(40, n_days=1260, seed=3).prices
-    w_prev = np.full(40, 1.0 / 40)
-    spec = PortfolioSpec(risk_aversion=2.0, max_weight=0.15, turnover_budget=0.25, w_prev=w_prev)
-    target = solve_mean_variance_cpu(build_risk_model(prices, estimator="ledoit_wolf"), spec).weights
-    last = prices.iloc[-1].to_numpy()
-    return target, last, np.floor(w_prev * 1e6 / last)
+    return prices.iloc[-1].to_numpy(), build_risk_model(prices, estimator="ledoit_wolf")
+
+
+def _spec(turnover_budget):
+    w_prev = np.full(40, 1.0 / 40)  # the book being rebalanced: equal weight
+    return PortfolioSpec(risk_aversion=2.0, max_weight=0.15, turnover_budget=turnover_budget,
+                         w_prev=w_prev if turnover_budget is not None else None), w_prev
+
+
+@pytest.fixture(scope="module")
+def rebalance(universe):
+    """A rebalance at the scale the MIP meets in practice: a $1M book held
+    equal-weight in whole shares, moving to a turnover-capped QP target."""
+    last, model = universe
+    spec, w_prev = _spec(0.25)
+    target = solve_mean_variance_cpu(model, spec).weights
+    return target, last, np.floor(w_prev * BOOK / last)
 
 
 # ---------------------------------------------------------------------------
@@ -169,11 +190,11 @@ def test_a_realistic_per_share_fee_never_leaves_the_mip_worse_off_than_ignoring_
     fee = 0.01
 
     def with_fees(solution):
-        return solution.tracking_error + fee * np.abs(solution.shares - prev_shares).sum() / 1e6
+        return solution.tracking_error + fee * np.abs(solution.shares - prev_shares).sum() / BOOK
 
-    blind = solve_lot_rounding_cuopt(target, prices, 1e6, prev_shares=prev_shares,
+    blind = solve_lot_rounding_cuopt(target, prices, BOOK, prev_shares=prev_shares,
                                      allow_cash=True, api=FAKE_API)
-    aware = solve_lot_rounding_cuopt(target, prices, 1e6, prev_shares=prev_shares, cost_per_share=fee,
+    aware = solve_lot_rounding_cuopt(target, prices, BOOK, prev_shares=prev_shares, cost_per_share=fee,
                                      allow_cash=True, api=FAKE_API)
 
     assert with_fees(aware) <= with_fees(blind) + 1e-6  # HiGHS's default absolute MIP gap
@@ -203,3 +224,70 @@ def test_cash_allowed_mip_is_never_worse_than_greedy(seed):
         mip = solve_lot_rounding_cuopt(target, prices, 250_000.0, lot_size=lot_size,
                                        allow_cash=True, api=FAKE_API)
         assert mip.tracking_error <= greedy.tracking_error + 1e-9
+
+
+# ---------------------------------------------------------------------------
+# GPU — skipped off-GPU
+# ---------------------------------------------------------------------------
+
+@requires_cuopt
+@pytest.mark.parametrize("allow_cash", [False, True], ids=["fully_invested", "cash_allowed"])
+@pytest.mark.parametrize("lot_size", [1, 10, 100])
+@pytest.mark.parametrize("turnover_budget", [None, 0.25], ids=["no_turnover_cap", "turnover_0.25"])
+def test_two_stage_qp_then_mip_on_gpu(universe, turnover_budget, lot_size, allow_cash):
+    """Stage 1 on cuOpt's QP, stage 2 on cuOpt's MIP, held to HiGHS's proven
+    optimum of the cash-allowed model built by the same code."""
+    from optimizer.mean_variance_cuopt import solve_mean_variance_cuopt
+
+    last, model = universe
+    spec, w_prev = _spec(turnover_budget)
+    target = solve_mean_variance_cuopt(model, spec).weights
+
+    gpu = solve_lot_rounding_cuopt(target, last, BOOK, lot_size=lot_size, allow_cash=allow_cash,
+                                   time_limit=30.0)
+    cash_optimum = solve_lot_rounding_cuopt(target, last, BOOK, lot_size=lot_size, allow_cash=True,
+                                            api=FAKE_API)
+
+    assert gpu.status in ("Optimal", "FeasibleFound")
+    assert np.all(np.isfinite(gpu.shares)) and np.all(gpu.shares >= 0)
+    invested = gpu.weights.sum()
+    assert invested <= 1.0 + 1e-5  # cuOpt's feasibility tolerance is 1e-6; rounding adds a little
+    if allow_cash:
+        assert gpu.tracking_error == pytest.approx(cash_optimum.tracking_error, rel=MIP_RTOL, abs=1e-7)
+        greedy = round_lots_greedy(target, last, BOOK, lot_size=lot_size)
+        assert gpu.tracking_error <= greedy.tracking_error * (1 + MIP_RTOL) + 1e-9
+    else:
+        assert invested >= 1.0 - 1e-5
+        # Fully invested is the cash-allowed model plus a constraint, so it can
+        # match that optimum at best; doing better would mean overspending.
+        assert gpu.tracking_error >= cash_optimum.tracking_error * (1 - MIP_RTOL) - 1e-7
+
+    if turnover_budget is not None:
+        # Stage 2 does not enforce stage 1's turnover cap. By the triangle
+        # inequality, rounding can overshoot it by at most the rounding error.
+        turnover = float(np.abs(gpu.weights - w_prev).sum())
+        assert turnover <= turnover_budget + gpu.tracking_error + 1e-5
+
+
+@requires_cuopt
+@pytest.mark.parametrize("case", ["costs", "trade_limit"])
+def test_mip_trading_terms_on_gpu_match_highs(rebalance, case):
+    """The trade variables and binary trade indicators, on cuOpt against HiGHS.
+
+    The fee is far above any real one on purpose. Moving a share toward its
+    target cuts tracking error by the share's price over the book value, so a
+    fee changes the answer only once it approaches the cheapest prices here
+    (~$10); at $20 it moves 14 of the 40 names.
+    """
+    target, last, prev_shares = rebalance
+    kwargs = {"prev_shares": prev_shares, "allow_cash": True,
+              "cost_per_share": 20.0 if case == "costs" else 0.0,
+              "max_trades": 10 if case == "trade_limit" else None}
+
+    gpu = solve_lot_rounding_cuopt(target, last, BOOK, time_limit=30.0, **kwargs)
+    ref = solve_lot_rounding_cuopt(target, last, BOOK, api=FAKE_API, **kwargs)
+
+    assert gpu.status in ("Optimal", "FeasibleFound")
+    assert _objective(gpu, BOOK) == pytest.approx(_objective(ref, BOOK), rel=MIP_RTOL, abs=1e-7)
+    if case == "trade_limit":
+        assert gpu.n_trades <= 10
