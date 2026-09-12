@@ -125,3 +125,34 @@ def test_a_number_no_fact_gives_is_flagged():
     """8.15% expected return and 14.32% volatility are facts; a Sharpe ratio
     of 0.57 is arithmetic the model was told not to do."""
     assert unsupported_numbers("Expected Sharpe is 0.57 on 8.15% return.", FACTS) == ["0.57"]
+
+
+# ---------------------------------------------------------------------------
+# The runner that records a real endpoint's behaviour
+# ---------------------------------------------------------------------------
+
+def test_the_runner_records_every_reply_and_never_writes_the_key(endpoint, tmp_path, monkeypatch):
+    from explainer import run_explainer
+
+    monkeypatch.setenv("NVIDIA_API_KEY", "not-a-real-key")
+    endpoint.reply["choices"][0]["message"]["content"] = "Turnover was 99.9% this quarter."
+    out = tmp_path / "nim"
+
+    assert run_explainer.main(["--endpoint", endpoint.url, "--model", "some/model",
+                               "--runs", "2", "--out", str(out)]) == 0
+
+    record = json.loads((out / "explanations.json").read_text())
+    assert [run["explanation"] for run in record["runs"]] == ["Turnover was 99.9% this quarter."] * 2
+    assert all(run["unsupported_numbers"] == ["99.9"] for run in record["runs"])
+    assert record["model"] == "some/model" and record["facts"]
+    assert all(r["headers"]["Authorization"] == "Bearer not-a-real-key" for r in endpoint.requests)
+    assert "not-a-real-key" not in (out / "explanations.json").read_text()
+
+
+def test_the_runner_refuses_the_hosted_endpoint_without_a_key(tmp_path, monkeypatch):
+    from explainer import run_explainer
+
+    monkeypatch.delenv("NVIDIA_API_KEY", raising=False)
+
+    assert run_explainer.main(["--out", str(tmp_path / "nim")]) == 2
+    assert not (tmp_path / "nim").exists()
