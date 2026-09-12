@@ -163,10 +163,16 @@ def _pct_of_book(value: float) -> str:
 
 
 def _mip_cell(row, greedy_error: float) -> str:
-    """A MIP's tracking error, and its multiple of greedy's (below 1 beats it)."""
+    """A MIP's tracking error, and how it compares with greedy's.
+
+    Stated as "x% better/worse" rather than a ratio: at two decimals a 0.2%
+    loss prints as 1.00×, indistinguishable from a win.
+    """
     if row is None or pd.isna(row["tracking_error"]):
         return "no solution"
-    cell = f"{_pct_of_book(row['tracking_error'])} ({row['tracking_error'] / greedy_error:.2f}×)"
+    change = (row["tracking_error"] / greedy_error - 1.0) * 100
+    versus = "same" if change == 0 else f"{abs(change):.2g}% {'worse' if change > 0 else 'better'}"
+    cell = f"{_pct_of_book(row['tracking_error'])} ({versus})"
     return cell + " †" if row["status"] == "FeasibleFound" else cell
 
 

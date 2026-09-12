@@ -65,19 +65,65 @@ parity checks pass on the same machine.
 | solve_cvxpy | 50 | 3.9 ms | 61.1 ms | 0.06× |
 | solve_cvxpy | 500 | 142.3 ms | 288.2 ms | 0.49× |
 | solve_cvxpy | 3000 | 5.96 s | 4.77 s | 1.25× |
+
+**NVIDIA GeForce RTX 4060 Laptop GPU, 8188 MiB, 592.82** — `pca_factor` covariance — `benchmarks/results/rtx4060-wsl2-pca/`
+
+| stage | assets | CPU | GPU | speedup |
+|---|---|---|---|---|
+| h2d_transfer | 50 | — | 50.3 ms | — |
+| h2d_transfer | 500 | — | 551.1 ms | — |
+| h2d_transfer | 3000 | — | 3.68 s | — |
+| features | 50 | 11.8 ms | 350.5 ms | 0.03× |
+| features | 500 | 91.7 ms | 4.76 s | 0.02× |
+| features | 3000 | 626.4 ms | 32.06 s | 0.02× |
+| risk_model | 50 | 9.6 ms | 159.8 ms | 0.06× |
+| risk_model | 500 | 157.9 ms | 1.96 s | 0.08× |
+| risk_model | 3000 | 4.59 s | 12.39 s | 0.37× |
+| psd_repair | 50 | 0.0 ms | 0.0 ms | 3.09× |
+| psd_repair | 500 | 0.5 ms | 0.3 ms | 1.81× |
+| psd_repair | 3000 | 58.6 ms | 58.4 ms | 1.00× |
+| solve | 50 | 7.3 ms | 82.0 ms | 0.09× |
+| solve | 500 | 133.4 ms | 256.1 ms | 0.52× |
+| solve | 3000 | 6.40 s | 2.41 s | 2.66× |
+| solve_cvxpy | 50 | 7.3 ms | 62.5 ms | 0.12× |
+| solve_cvxpy | 500 | 133.4 ms | 282.0 ms | 0.47× |
+| solve_cvxpy | 3000 | 6.40 s | 4.76 s | 1.34× |
 <!-- END GENERATED: gpu-speedup -->
 
 ### Lot rounding: MIP vs greedy
 
 Stage 2 rounds the stage-1 weights to whole lots. Each row rounds one QP target
 three ways and reports L1 tracking error to it, as a share of the book; the MIP
-columns add, in parentheses, their multiple of greedy's — below 1× the MIP
-wins. "Fully invested" is the MIP's default budget rule (realized weights sum
-to exactly 1); "cash allowed" is greedy's own rule (they sum to at most 1),
-under which greedy's answer is always feasible for the MIP.
+columns add, in parentheses, how that compares with greedy's. "Fully invested"
+is the MIP's default budget rule (realized weights sum to exactly 1); "cash
+allowed" is greedy's own rule (they sum to at most 1), under which greedy's
+answer is always feasible for the MIP.
 
 <!-- BEGIN GENERATED: lot-rounding -->
-_No lot-rounding results committed yet — run `benchmarks.run_lot_rounding` on a GPU host (see [docs/setup-wsl2.md](docs/setup-wsl2.md)). This table is generated from `benchmarks/results/`, so it fills in when they are._
+**NVIDIA GeForce RTX 4060 Laptop GPU, 8188 MiB, 592.82** — $1M book — `benchmarks/results/rtx4060-wsl2-lots/`
+
+| assets | turnover cap | lot | greedy | MIP, fully invested | MIP, cash allowed | cash left: greedy / MIP, cash allowed | MIP solve: fully invested / cash allowed |
+|---|---|---|---|---|---|---|---|
+| 50 | none | 1 | 0.55% | 0.55% (0.2% worse) | 0.54% (2.2% better) | 0.0011% / 0.013% | 2.61 s / 7.65 s |
+| 50 | none | 10 | 6.1% | 6.1% (0.14% worse) | 5.1% (16% better) | 0.0083% / 2.5% | 4.23 s / 8.23 s |
+| 50 | none | 100 | 40% | 41% (2.7% worse) | 38% (5.8% better) | 0.13% / 3.4% | 2.77 s / 3.10 s |
+| 50 | 0.25 | 1 | 0.84% | 0.53% (36% better) | 0.52% (37% better) | 0% / 0.002% | 5.30 s / 7.95 s |
+| 50 | 0.25 | 10 | 7% | 7% (0.061% worse) | 6.3% (10% better) | 0.0041% / 4.4% | 4.30 s / 4.67 s |
+| 50 | 0.25 | 100 | 55% | 56% (1.1% worse) | 50% (9.7% better) | 0.034% / 32% | 9.56 s / 9.94 s |
+| 200 | none | 1 | 0.94% | 0.95% (1.6% worse) | 0.93% (0.47% better) | 0% / 0.0048% | 3.92 s / 5.00 s |
+| 200 | none | 10 | 11% | 11% (0.39% worse) | 11% (2.5% better) | 0% / 4.5% | 23.49 s / 4.65 s |
+| 200 | none | 100 | 83% | 84% (1.7% worse) | 79% (4.9% better) | 0.076% / 34% | 12.97 s / 2.67 s |
+| 200 | 0.25 | 1 | 1.3% | 1.3% (1.1% worse) † | 1.3% (0.22% better) † | 0% / 0.0029% | 60.05 s / 60.02 s |
+| 200 | 0.25 | 10 | 14% | 14% (0.5% worse) † | 14% (0.83% better) | 0.0044% / 4.4% | 60.08 s / 5.09 s |
+| 200 | 0.25 | 100 | 104% | 104% (0.0075% worse) | 88% (15% better) | 0.0082% / 70% | 36.38 s / 3.74 s |
+| 500 | none | 1 | 4.7% | 4.7% (0.27% worse) † | 4.7% (0.25% better) | 0% / 0.04% | 60.18 s / 8.71 s |
+| 500 | none | 10 | 52% | 52% (0.56% worse) † | 50% (3.7% better) | 0.007% / 18% | 60.03 s / 5.24 s |
+| 500 | none | 100 | 172% | 172% (0.032% worse) † | 100% (42% better) | 0.055% / 100% | 60.03 s / 434.3 ms |
+| 500 | 0.25 | 1 | 7.1% | 7.2% (1.3% worse) † | 7.1% (0.012% better) † | 0% / 0.0073% | 60.11 s / 60.05 s |
+| 500 | 0.25 | 10 | 75% | 75% (0.16% worse) † | 68% (8.9% better) | 0.011% / 39% | 60.05 s / 3.50 s |
+| 500 | 0.25 | 100 | 171% | 171% (0.061% worse) † | 100% (41% better) | 0.11% / 100% | 62.05 s / 1.06 s |
+
+† hit the time limit: the best solution found is shown, not a proven optimum.
 <!-- END GENERATED: lot-rounding -->
 
 ---

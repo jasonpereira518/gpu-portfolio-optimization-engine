@@ -139,9 +139,27 @@ def test_lot_rounding_table_sets_each_mip_budget_rule_against_greedy(tmp_path):
     text = lot_rounding_tables(tmp_path)
 
     assert "NVIDIA GeForce RTX 4060 Laptop GPU" in text
-    assert "| 50 | none | 1 | 0.64% | 0.61% (0.95×) | 0.5% (0.78×) | 0.002% / 0.33% | 2.50 s / 10.0 ms |" in text
-    assert "| 200 | 0.25 | 100 | 112% | 116% (1.04×) † | no solution | 0.004% / — | 60.00 s / — |" in text
+    assert ("| 50 | none | 1 | 0.64% | 0.61% (4.7% better) | 0.5% (22% better) | 0.002% / 0.33% "
+            "| 2.50 s / 10.0 ms |") in text
+    assert "| 200 | 0.25 | 100 | 112% | 116% (3.6% worse) † | no solution | 0.004% / — | 60.00 s / — |" in text
     assert "† " in text.splitlines()[-1]  # the time-limit footnote, only when needed
+
+
+def test_lot_rounding_table_never_rounds_a_loss_into_a_tie(tmp_path):
+    """0.2% worse than greedy must not print as 1.00×: a reader has to be able
+    to tell a narrow loss from a narrow win."""
+    host = tmp_path / "rtx-wsl2-lots"
+    host.mkdir()
+    (host / "environment.json").write_text(json.dumps({"gpu": "NVIDIA GeForce RTX 4060 Laptop GPU"}))
+    pd.DataFrame([
+        _lot_row(50, None, 1, "greedy", "Greedy", 0.005518, 0.0, 0.0),
+        _lot_row(50, None, 1, "mip_fully_invested", "Optimal", 0.005529, 0.0, 2.6),
+        _lot_row(50, None, 1, "mip_cash_allowed", "Optimal", 0.005397, 0.0001, 7.6),
+    ]).to_csv(host / "lot_rounding.csv", index=False)
+
+    row = [line for line in lot_rounding_tables(tmp_path).splitlines() if line.startswith("| 50 |")][0]
+
+    assert "(0.2% worse)" in row and "(2.2% better)" in row
 
 
 def test_lot_rounding_table_skips_hosts_that_only_ran_greedy(tmp_path):
