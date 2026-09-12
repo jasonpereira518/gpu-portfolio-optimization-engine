@@ -92,6 +92,38 @@ def test_risk_model_rejects_mismatched_shapes():
         RiskModel(np.zeros(3), np.zeros((3, 3)), ["a"], "sample", "cpu")
 
 
+@pytest.mark.parametrize("estimator, needs_repair", [
+    ("ledoit_wolf", False),  # convex combination of a PSD matrix and a positive identity
+    ("pca_factor", False),   # B F B' + D with F, D >= 0
+    ("sample", True),        # singular when n > T; float error can push eigenvalues below 0
+])
+def test_psd_repair_only_runs_where_the_estimator_can_be_indefinite(
+    prices, estimator, needs_repair, monkeypatch
+):
+    """The repair is an O(n^3) eigendecomposition — seconds at n=3,000 — so an
+    estimator that is PSD by construction must not pay for it inside a solve."""
+    model = build_risk_model(prices, estimator=estimator)
+    calls = []
+    real_eigh = np.linalg.eigh
+    monkeypatch.setattr(np.linalg, "eigh", lambda a: calls.append(a.shape) or real_eigh(a))
+
+    cov = model.nearest_psd()
+
+    assert bool(calls) is needs_repair
+    np.testing.assert_allclose(cov, model.symmetrized(), atol=1e-12)
+
+
+def test_repaired_model_needs_no_further_repair(prices, monkeypatch):
+    """Benchmarks repair once, as their own stage, then hand solvers the result."""
+    repaired = build_risk_model(prices, estimator="sample").with_repaired_cov()
+    calls = []
+    monkeypatch.setattr(np.linalg, "eigh", lambda a: calls.append(a.shape))
+
+    repaired.nearest_psd()
+
+    assert calls == []
+
+
 def test_nearest_psd_clips_negative_eigenvalues():
     from pipeline.risk_model import RiskModel
 

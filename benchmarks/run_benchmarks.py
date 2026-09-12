@@ -45,11 +45,29 @@ def bench_cpu(prices: pd.DataFrame, estimator: str, spec: PortfolioSpec,
     )
     timings.append(t)
 
-    _, t = benchmark_stage(
-        solve_mean_variance_cpu, model, spec, stage="solve",
-        extra={"solver": "cvxpy"}, **common,
+    timings += _bench_repair_and_solve(
+        model, spec, common, [("solve", solve_mean_variance_cpu, {}, "cvxpy+clarabel")],
     )
-    timings.append(t)
+    return timings
+
+
+def _bench_repair_and_solve(model, spec, common: dict, solvers: list) -> list[Timing]:
+    """Time covariance repair once, then each solver on the repaired model.
+
+    Repair is CPU linear algebra (a no-op for estimators that are PSD by
+    construction); inside a solver's timed call it would bill an O(n^3)
+    eigendecomposition to the solver on both backends. Each solve row also
+    records the objective it reached, since speed only compares at matched
+    quality.
+    """
+    repaired, t = benchmark_stage(model.with_repaired_cov, stage="psd_repair", **common)
+    timings = [t]
+    for stage, solve_fn, kwargs, label in solvers:
+        solution, t = benchmark_stage(
+            solve_fn, repaired, spec, stage=stage, extra={"solver": label}, **common, **kwargs,
+        )
+        t.extra["objective"] = solution.objective
+        timings.append(t)
     return timings
 
 
@@ -86,6 +104,7 @@ def bench_gpu(prices: pd.DataFrame, estimator: str, spec: PortfolioSpec,
     from optimizer.cuopt_compat import cuopt_available
 
     if cuopt_available():
+        from optimizer.mean_variance_cpu import solve_mean_variance_cpu
         from optimizer.mean_variance_cuopt import solve_mean_variance_cuopt
 
         if model is None:
@@ -96,11 +115,12 @@ def bench_gpu(prices: pd.DataFrame, estimator: str, spec: PortfolioSpec,
             # fully-GPU pipeline.
             model = build_risk_model(prices, estimator=estimator)
 
-        _, t = benchmark_stage(
-            solve_mean_variance_cuopt, model, spec, stage="solve",
-            extra={"solver": "cuopt"}, **common,
-        )
-        timings.append(t)
+        timings += _bench_repair_and_solve(model, spec, common, [
+            ("solve", solve_mean_variance_cuopt, {}, "cuopt"),
+            # Same CVXPY modeling layer as the CPU column, cuOpt underneath:
+            # separates what the solver buys from what model building costs.
+            ("solve_cvxpy", solve_mean_variance_cpu, {"solver": "CUOPT"}, "cvxpy+cuopt"),
+        ])
     else:
         log.warning("cuOpt unavailable; skipping GPU solve stage")
 
@@ -110,6 +130,7 @@ def bench_gpu(prices: pd.DataFrame, estimator: str, spec: PortfolioSpec,
 def run_sweep(
     sizes: list[int], n_days: int, estimator: str, n_runs: int,
     max_weight: float | None = None, risk_aversion: float = 1.0, seed: int = 11,
+    backends: tuple[str, ...] = ("cpu", "gpu"),
 ) -> tuple[pd.DataFrame, list[Timing]]:
     all_timings: list[Timing] = []
 
@@ -124,10 +145,33 @@ def run_sweep(
         prices = synthetic_prices(n, n_days=n_days, seed=seed).prices
         log.info("=== n=%d assets x %d days (max_weight=%.4f) ===", n, n_days, cap)
 
-        all_timings += bench_cpu(prices, estimator, spec, n_runs)
-        all_timings += bench_gpu(prices, estimator, spec, n_runs)
+        if "cpu" in backends:
+            all_timings += bench_cpu(prices, estimator, spec, n_runs)
+        if "gpu" in backends:
+            all_timings += bench_gpu(prices, estimator, spec, n_runs)
 
     return pd.DataFrame([t.as_row() for t in all_timings]), all_timings
+
+
+def objective_gaps(raw: pd.DataFrame) -> pd.DataFrame:
+    """Each solve's objective and its relative gap to the CPU solve at the same size.
+
+    A faster solver that stops at a worse objective has not solved the same
+    problem faster; this puts the two numbers next to each other.
+    """
+    if "extra_objective" not in raw:
+        return pd.DataFrame()
+    solves = raw[raw["extra_objective"].notna()]
+    reference = solves[solves["backend"] == "cpu"].set_index("n_assets")["extra_objective"]
+    rows = []
+    for _, r in solves.iterrows():
+        ref = reference.get(r["n_assets"], np.nan)
+        rows.append({
+            "n_assets": r["n_assets"], "backend": r["backend"], "solver": r["extra_solver"],
+            "objective": r["extra_objective"], "median_s": r["median_s"],
+            "rel_gap_vs_cpu": abs(r["extra_objective"] - ref) / max(abs(ref), 1e-12),
+        })
+    return pd.DataFrame(rows)
 
 
 def main() -> int:
@@ -139,6 +183,8 @@ def main() -> int:
                         choices=["sample", "ledoit_wolf", "pca_factor"])
     parser.add_argument("--max-weight", type=float, default=None)
     parser.add_argument("--risk-aversion", type=float, default=1.0)
+    parser.add_argument("--backends", nargs="+", choices=["cpu", "gpu"], default=["cpu", "gpu"],
+                        help="e.g. --backends cpu to run the CPU column natively on another OS")
     parser.add_argument("--out", type=Path, default=RESULTS_DIR)
     args = parser.parse_args()
 
@@ -151,6 +197,7 @@ def main() -> int:
     raw, timings = run_sweep(
         args.sizes, args.days, args.estimator, args.runs,
         max_weight=args.max_weight, risk_aversion=args.risk_aversion,
+        backends=tuple(args.backends),
     )
 
     args.out.mkdir(parents=True, exist_ok=True)
@@ -175,6 +222,11 @@ def main() -> int:
         present = "GPU" if "gpu" in backends else "CPU"
         print(f"\nPer-stage summary ({present}-only — no speedup, nothing to compare against):")
     print(table.to_string(index=False, float_format=lambda v: f"{v:.5f}"))
+
+    gaps = objective_gaps(raw)
+    if not gaps.empty:
+        print("\nObjective reached by each solver (relative gap vs the CPU reference):")
+        print(gaps.to_string(index=False, float_format=lambda v: f"{v:.3e}"))
 
     if "gpu" not in backends:
         print(

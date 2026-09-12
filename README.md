@@ -31,7 +31,17 @@ the GPU code has actually run.** Everything above marked "not yet executed" is
 code written against NVIDIA's published API and guarded so that it fails with an
 actionable message rather than silently falling back to CPU. Section
 "[Reproducing the GPU results](#reproducing-the-gpu-results)" is the exact
-sequence to fill in the missing column on a rented L4/A10.
+sequence to fill in the missing column.
+
+### GPU results
+
+Generated from the committed files in `benchmarks/results/` by
+`python -m benchmarks.render_tables` — never typed — and only after the
+parity checks pass on the same machine.
+
+<!-- BEGIN GENERATED: gpu-speedup -->
+_No GPU results committed yet — see [docs/setup-wsl2.md](docs/setup-wsl2.md). This table is generated from `benchmarks/results/`, so it fills in when they are._
+<!-- END GENERATED: gpu-speedup -->
 
 ---
 
@@ -215,16 +225,20 @@ test that gets ignored.
 
 ## Reproducing the GPU results
 
-On a rented L4 / A10 / L40S (an H100 is unnecessary at this problem size):
-
-```bash
-docker build -t gpu-portfolio-engine . && docker run --gpus all -it --rm -v $(pwd):/workspace gpu-portfolio-engine
-```
-
-Or without Docker:
+Any CUDA GPU from Volta onward with at least 16 GB of system RAM (cuOpt's
+minimum). On Windows with a GeForce RTX card, follow
+[`docs/setup-wsl2.md`](docs/setup-wsl2.md), which also covers what WSL2 can and
+cannot measure. The GPU stack is pinned to a single release (cuDF, cuML and
+cuOpt 26.08) in `requirements-gpu.txt`:
 
 ```bash
 pip install --extra-index-url=https://pypi.nvidia.com -r requirements-gpu.txt
+```
+
+Or in the container (base image pinned by digest):
+
+```bash
+docker build -t gpu-portfolio-engine . && docker run --gpus all -it --rm -v $(pwd):/workspace gpu-portfolio-engine
 ```
 
 Then, **in this order** — parity before speed, always:
@@ -288,10 +302,13 @@ pipeline/      risk_model.py (shared contract), cpu_baseline.py, gpu_pipeline.py
 optimizer/     spec.py (shared contract), mean_variance_cpu.py, mean_variance_cuopt.py,
                turnover_mip_cuopt.py, cuopt_compat.py (version shim)
 backtest/      engine.py, run_backtest.py
-benchmarks/    harness.py, run_benchmarks.py, results/
+benchmarks/    harness.py, run_benchmarks.py, render_tables.py (docs tables from results/), results/
 explainer/     nim_explainer.py
 dashboard/     app.py
-tests/         test_data.py, test_risk_models.py, test_optimizer.py, test_backtest.py
+notebooks/     colab_gpu_runner.ipynb (second GPU data point on a free T4)
+docs/          case-study.md, setup-wsl2.md (Windows 11 + WSL2 GPU bring-up)
+tests/         test_data.py, test_risk_models.py, test_optimizer.py, test_backtest.py,
+               test_cuopt_formulation.py + fake_cuopt.py, test_benchmarks.py, test_render_tables.py
 ```
 
 ---

@@ -5,7 +5,8 @@ releases (LP/QP/MILP was split into "Convex Optimization" and "MIP" sections,
 and enum locations moved). Rather than scatter try/except across the optimizer,
 every version-sensitive lookup is isolated here and asserted once at import.
 
-API surface targeted (verified against the 26.02 reference):
+API surface targeted (the 26.02–26.08 references; model-building semantics
+that matter are documented in ``optimizer/mean_variance_cuopt.py``):
 
     from cuopt.linear_programming.problem import (
         Problem, Variable, LinearExpression, QuadraticExpression,
@@ -59,9 +60,10 @@ def load_cuopt() -> CuOptApi:
     except ImportError as exc:  # pragma: no cover - exercised only off-GPU
         raise CuOptUnavailable(
             "cuOpt is not installed in this environment. This module only runs on a "
-            "CUDA machine. Install with:\n"
-            "  pip install --extra-index-url=https://pypi.nvidia.com 'cuopt-cu13==26.2.*'\n"
-            "and pin the version you verified against. On a CPU-only host, use "
+            "CUDA machine. Install the pinned GPU stack (one release for cuDF, cuML "
+            "and cuOpt) with:\n"
+            "  pip install --extra-index-url=https://pypi.nvidia.com -r requirements-gpu.txt\n"
+            "See docs/setup-wsl2.md. On a CPU-only host, use "
             "optimizer.mean_variance_cpu instead."
         ) from exc
 
