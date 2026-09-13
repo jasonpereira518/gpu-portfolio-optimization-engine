@@ -24,16 +24,15 @@ reference.
 | Benchmark harness (per-stage, warm-up separated, variance reported)           | Complete                                                                                                 |
 | GPU pipeline (cuDF/CuPy for returns, rolling features, Ledoit-Wolf covariance) | Executed on an RTX 4060 Laptop GPU (WSL2); parity and benchmark results committed                       |
 | cuOpt QP layer (box, budget, turnover, group caps)                           | Executed on an RTX 4060 Laptop GPU (WSL2); parity-checked against CVXPY, results committed               |
-| cuOpt MIP layer (lot rounding, [`turnover_mip_cuopt.py`](optimizer/turnover_mip_cuopt.py)) | Executed on an RTX 4060 Laptop GPU (WSL2): cuOpt QP → cuOpt MIP tested against HiGHS, formulation against brute force, sweep committed. **Does not beat greedy as shipped** — fully invested, it lost 17 of 18 cases ([why](#what-is-actually-engineered-here), item 4) |
+| cuOpt MIP layer (lot rounding, [`turnover_mip_cuopt.py`](optimizer/turnover_mip_cuopt.py)) | Executed on an RTX 4060 Laptop GPU (WSL2): cuOpt QP → cuOpt MIP tested against HiGHS, formulation against brute force, sweep committed. Under the default cash-band budget it beats greedy in 18 of 18 cases with at most 0.5% cash — **by under 1% in 13 of them** ([why](#what-is-actually-engineered-here), item 4) |
 | cuML PCA factor covariance estimator                                         | Executed on an RTX 4060 Laptop GPU (WSL2); parity-checked against the CPU path, benchmark results committed |
-| NIM explainer (stretch)                                                       | Written with an offline fallback, **not yet executed**                                                   |
+| NIM explainer (stretch)                                                       | Executed against NVIDIA's hosted API (Nemotron 3.5 Lightning): 3 of 5 calls answered, and **2 of the 3 replies did arithmetic they were told not to, and got it wrong** ([results](#nim-explainer)) |
 
 GPU numbers below are from a single RTX 4060 Laptop GPU under WSL2 — see
 [docs/setup-wsl2.md](docs/setup-wsl2.md) for the bring-up sequence and
 "[Reproducing the GPU results](#reproducing-the-gpu-results)" for the exact
-commands. The NIM explainer, the one row still marked "not yet executed", is
-code written against NVIDIA's published API with a template fallback for when
-no endpoint is reachable.
+commands. The NIM explainer ran against NVIDIA's hosted API rather than a local
+GPU: no LLM NIM is validated on an 8 GB card.
 
 ### GPU results
 
@@ -92,38 +91,77 @@ parity checks pass on the same machine.
 ### Lot rounding: MIP vs greedy
 
 Stage 2 rounds the stage-1 weights to whole lots. Each row rounds one QP target
-three ways and reports L1 tracking error to it, as a share of the book; the MIP
-columns add, in parentheses, how that compares with greedy's. "Fully invested"
-is the MIP's default budget rule (realized weights sum to exactly 1); "cash
-allowed" is greedy's own rule (they sum to at most 1), under which greedy's
-answer is always feasible for the MIP.
+four ways and reports L1 tracking error to it, as a share of the book; the MIP
+columns add, in parentheses, how that compares with greedy's. The MIP runs
+under three budget rules: "fully invested" (realized weights sum to exactly
+1), "cash allowed" (greedy's own rule: they sum to at most 1, so greedy's
+answer is always feasible for the MIP), and between them the default "cash
+band" (invested between 99.5% and 100%).
 
 <!-- BEGIN GENERATED: lot-rounding -->
 **NVIDIA GeForce RTX 4060 Laptop GPU, 8188 MiB, 592.82** — $1M book — `benchmarks/results/rtx4060-wsl2-lots/`
 
-| assets | turnover cap | lot | greedy | MIP, fully invested | MIP, cash allowed | cash left: greedy / MIP, cash allowed | MIP solve: fully invested / cash allowed |
-|---|---|---|---|---|---|---|---|
-| 50 | none | 1 | 0.55% | 0.55% (0.2% worse) | 0.54% (2.2% better) | 0.0011% / 0.013% | 2.61 s / 7.65 s |
-| 50 | none | 10 | 6.1% | 6.1% (0.14% worse) | 5.1% (16% better) | 0.0083% / 2.5% | 4.23 s / 8.23 s |
-| 50 | none | 100 | 40% | 41% (2.7% worse) | 38% (5.8% better) | 0.13% / 3.4% | 2.77 s / 3.10 s |
-| 50 | 0.25 | 1 | 0.84% | 0.53% (36% better) | 0.52% (37% better) | 0% / 0.002% | 5.30 s / 7.95 s |
-| 50 | 0.25 | 10 | 7% | 7% (0.061% worse) | 6.3% (10% better) | 0.0041% / 4.4% | 4.30 s / 4.67 s |
-| 50 | 0.25 | 100 | 55% | 56% (1.1% worse) | 50% (9.7% better) | 0.034% / 32% | 9.56 s / 9.94 s |
-| 200 | none | 1 | 0.94% | 0.95% (1.6% worse) | 0.93% (0.47% better) | 0% / 0.0048% | 3.92 s / 5.00 s |
-| 200 | none | 10 | 11% | 11% (0.39% worse) | 11% (2.5% better) | 0% / 4.5% | 23.49 s / 4.65 s |
-| 200 | none | 100 | 83% | 84% (1.7% worse) | 79% (4.9% better) | 0.076% / 34% | 12.97 s / 2.67 s |
-| 200 | 0.25 | 1 | 1.3% | 1.3% (1.1% worse) † | 1.3% (0.22% better) † | 0% / 0.0029% | 60.05 s / 60.02 s |
-| 200 | 0.25 | 10 | 14% | 14% (0.5% worse) † | 14% (0.83% better) | 0.0044% / 4.4% | 60.08 s / 5.09 s |
-| 200 | 0.25 | 100 | 104% | 104% (0.0075% worse) | 88% (15% better) | 0.0082% / 70% | 36.38 s / 3.74 s |
-| 500 | none | 1 | 4.7% | 4.7% (0.27% worse) † | 4.7% (0.25% better) | 0% / 0.04% | 60.18 s / 8.71 s |
-| 500 | none | 10 | 52% | 52% (0.56% worse) † | 50% (3.7% better) | 0.007% / 18% | 60.03 s / 5.24 s |
-| 500 | none | 100 | 172% | 172% (0.032% worse) † | 100% (42% better) | 0.055% / 100% | 60.03 s / 434.3 ms |
-| 500 | 0.25 | 1 | 7.1% | 7.2% (1.3% worse) † | 7.1% (0.012% better) † | 0% / 0.0073% | 60.11 s / 60.05 s |
-| 500 | 0.25 | 10 | 75% | 75% (0.16% worse) † | 68% (8.9% better) | 0.011% / 39% | 60.05 s / 3.50 s |
-| 500 | 0.25 | 100 | 171% | 171% (0.061% worse) † | 100% (41% better) | 0.11% / 100% | 62.05 s / 1.06 s |
+| assets | turnover cap | lot | greedy | MIP, fully invested | MIP, cash band | MIP, cash allowed | cash left: greedy / band / cash allowed | MIP solve: fully invested / band / cash allowed |
+|---|---|---|---|---|---|---|---|---|
+| 50 | none | 1 | 0.55% | 0.55% (0.2% worse) | 0.54% (2.2% better) | 0.54% (2.2% better) | 0.0011% / 0.013% / 0.013% | 2.80 s / 6.80 s / 13.35 s |
+| 50 | none | 10 | 6.1% | 6.3% (2.5% worse) | 5.8% (5.7% better) | 5.1% (16% better) | 0.0083% / 0.5% / 2.5% | 2.37 s / 5.43 s / 7.70 s |
+| 50 | none | 100 | 40% | 41% (2.7% worse) | 40% (0.89% better) | 38% (5.8% better) | 0.13% / 0.49% / 3.4% | 2.52 s / 2.69 s / 3.38 s |
+| 50 | 0.25 | 1 | 0.84% | 0.53% (37% better) | 0.52% (37% better) | 0.52% (37% better) | 0% / 0.002% / 0.002% | 1.25 s / 8.84 s / 12.20 s |
+| 50 | 0.25 | 10 | 7% | 7% (0.061% worse) | 6.9% (1.4% better) | 6.3% (10% better) | 0.0041% / 0.46% / 4.4% | 3.29 s / 8.15 s / 7.27 s |
+| 50 | 0.25 | 100 | 55% | 56% (1.1% worse) | 55% (0.78% better) | 50% (9.7% better) | 0.034% / 0.34% / 32% | 2.01 s / 2.56 s / 9.42 s |
+| 200 | none | 1 | 0.94% | 0.95% (1.6% worse) | 0.93% (0.47% better) | 0.93% (0.47% better) | 0% / 0.0048% / 0.0048% | 7.50 s / 1.79 s / 7.41 s |
+| 200 | none | 10 | 11% | 11% (0.36% better) | 11% (1.7% better) | 11% (2.5% better) | 0% / 0.43% / 4.5% | 26.10 s / 448.0 ms / 7.51 s |
+| 200 | none | 100 | 83% | 84% (1.7% worse) | 82% (0.51% better) | 79% (4.9% better) | 0.076% / 0.49% / 34% | 11.82 s / 1.90 s / 3.06 s |
+| 200 | 0.25 | 1 | 1.3% | 1.3% (0.81% worse) † | 1.3% (0.054% better) † | 1.3% (0.038% better) † | 0% / 0% / 0.0082% | 60.11 s / 60.02 s / 60.03 s |
+| 200 | 0.25 | 10 | 14% | 14% (0.14% worse) † | 14% (0.22% better) † | 14% (0.83% better) | 0.0044% / 0.32% / 4.4% | 60.01 s / 60.03 s / 4.77 s |
+| 200 | 0.25 | 100 | 104% | 104% (0.0079% worse) | 103% (0.26% better) | 88% (15% better) | 0.0082% / 0.28% / 70% | 34.38 s / 2.42 s / 5.23 s |
+| 500 | none | 1 | 4.7% | 4.7% (0.26% worse) † | 4.7% (0.25% better) † | 4.7% (0.25% better) | 0% / 0.04% / 0.04% | 60.04 s / 60.14 s / 4.96 s |
+| 500 | none | 10 | 52% | 52% (0.52% better) | 51% (0.9% better) | 50% (3.7% better) | 0.007% / 0.43% / 18% | 56.72 s / 1.35 s / 3.73 s |
+| 500 | none | 100 | 172% | 172% (0.23% worse) † | 171% (0.56% better) † | 100% (42% better) | 0.055% / 0.5% / 100% | 60.16 s / 60.08 s / 516.4 ms |
+| 500 | 0.25 | 1 | 7.1% | 7.2% (0.41% worse) † | 7.1% (0.08% better) † | 7.1% (0.019% worse) † | 0% / 0.0084% / 0.029% | 60.02 s / 60.04 s / 60.03 s |
+| 500 | 0.25 | 10 | 75% | 75% (0.12% worse) † | 75% (0.24% better) † | 68% (8.9% better) | 0.011% / 0.5% / 39% | 60.04 s / 60.04 s / 5.35 s |
+| 500 | 0.25 | 100 | 171% | 171% (0.061% worse) † | 170% (0.23% better) † | 100% (41% better) | 0.11% / 0.5% / 100% | 60.02 s / 60.08 s / 675.7 ms |
 
 † hit the time limit: the best solution found is shown, not a proven optimum.
 <!-- END GENERATED: lot-rounding -->
+
+### NIM explainer
+
+The explainer turns the optimizer's facts about a rebalance into a few plain
+sentences; the model is never asked to compute anything. Each run below asks a
+NIM-served model to explain one real rebalance several times, and counts the
+replies containing a number that no fact supports, even after rounding.
+
+<!-- BEGIN GENERATED: nim-explainer -->
+**nvidia/nemotron-3.5-lightning-30b-a3b** — NVIDIA hosted API — `benchmarks/results/nim-hosted/`
+
+| calls answered | median latency | median tokens/s | replies with numbers the facts don't support |
+|---|---|---|---|
+| 3 of 5 | 33.96 s | 4 | 2 of 3 (81.9) |
+
+> The rebalance on 2018-10-31 used the full 25% turnover budget, which drove the portfolio's expected annual return to 56.72% and volatility to 30.22%. Position caps of 15% were binding on five names, while a long-only floor excluded 30 names from the universe of 40. Risk is concentrated in SYN00000, which alone contributes 24.0% of the portfolio's variance, with the top five names accounting for the majority of variance.
+<!-- END GENERATED: nim-explainer -->
+
+The flagged number is the check doing its job. Two of the three answered replies
+said the top five names carry "81.9% of total variance". The facts list their
+five shares separately, and they sum to 82.3%. So the model did the arithmetic
+it was told not to, and got it wrong, the same way both times. The check cannot
+see everything:
+
+- The reply quoted above has no flagged number, but it states a cause the facts
+  do not give ("drove the portfolio's expected annual return"). It also says
+  "majority of variance", which it could only know by summing.
+- Another reply said the rebalance "reduced portfolio turnover to exactly
+  25.00%". Turnover is what the rebalance traded, not a level it changed.
+
+The template fallback (`explain_offline`) states the same facts with no such
+errors, instantly and at no cost, which is the bar the model has to clear.
+
+Of the two failed calls, one hit the client's 60 s timeout. The other stopped at
+the 400-token limit, even with thinking off and answers running about 120
+tokens. Latency is that of NVIDIA's free hosted tier from a laptop. Queueing
+dominates, so the 4 tokens/s says nothing about the model's throughput on
+dedicated hardware.
 
 ---
 
@@ -234,20 +272,40 @@ risk-aware — so `report_drift` measures the realized volatility gap per
 rebalance, and a greedy largest-remainder rounder is included as the baseline
 the MIP has to beat. If it does not beat it, that gets reported.
 
-It does not, as shipped. On the RTX 4060 the fully-invested MIP lost to greedy
-in 17 of the 18 sweep cases and hit its 60 s limit in 8 ([table](#lot-rounding-mip-vs-greedy)).
-The budget rule, not the solver, is at fault, twice over. Greedy may keep
-cash and the fully-invested MIP may not, so the two were never solving the
-same problem. And integer lots at market prices can meet `sum(w) = 1` only to
-within a solver's feasibility tolerance, which then decides the answer: on a
-50-name book, widening the allowed budget miss from 1e-8 to 1e-7 — one cent to
-ten cents on $1M — moved HiGHS's proven optimum 5%, and cuOpt's and HiGHS's
-"optimal" fully-invested answers differ by as much as 6.4%, in both directions.
-(Under the cash-allowed rule they agree exactly.) Under greedy's
-own rule (`allow_cash=True`) cuOpt matches HiGHS's proven optimum and beats
-greedy in every case — but by 0.5% or less in four of the six single-share
-cases, and at 10- and 100-share lots largely by leaving cash uninvested, up to
-the whole book. Two more properties of the stage-2 objective, measured rather
+It does now, narrowly, but only once the budget rule was fixed
+([table](#lot-rounding-mip-vs-greedy)). Neither of the first two rules works:
+
+- **Fully invested** (`max_cash=0`). This lost to greedy in 17 of the 18 sweep
+  cases in the first GPU run, and in 15 of 18 on a rerun. Greedy may keep cash
+  and this rule may not, so the two were never solving the same problem. Worse,
+  integer lots at market prices can meet `sum(w) = 1` only to within a solver's
+  feasibility tolerance, and that tolerance decides the answer. On a 50-name
+  book, widening the allowed budget miss from 1e-8 to 1e-7 (one cent to ten
+  cents on $1M) moved HiGHS's proven optimum by 5%. cuOpt's and HiGHS's
+  "optimal" fully-invested answers differ by as much as 6.4%, in both
+  directions, and cuOpt's own answers change between runs.
+- **Cash allowed** (`max_cash=1`, greedy's own rule). Greedy's answer is
+  always feasible here. At 10- and 100-share lots, though, the MIP wins largely
+  by leaving cash uninvested, up to the whole book.
+
+The default is a **cash band** (`max_cash=0.005`): invested between 99.5% and
+100%. Unlike the exact budget, it is well-posed, since widening its floor by
+1e-6 moves the optimum by at most 2e-5. It also admits greedy's answer
+whenever greedy leaves 0.5% cash or less, which it did in every sweep case.
+On the RTX 4060 it:
+
+- beat greedy in all 18 cases, with at most 0.50% cash;
+- won by under 1% in 13 of them, and by 1.4% to 5.7% in four more;
+- won the one large case, 37% at 50 names with a turnover cap, which every MIP
+  rule wins.
+
+cuOpt reached the same answer as HiGHS in all 18 cases (within 0.007%), or a
+better one. At 200 names with a turnover cap and single-share lots, its 60 s
+incumbent was 1.5% better than HiGHS's after 120 s. It is not faster at this
+size, though. It hit its 60 s limit without proving optimality in 7 cases, and
+HiGHS on a laptop CPU proved 5 of those 7 in under 7 s. A few hundred integer
+lot variables is not yet a problem size where a GPU MIP pays off. Two more
+properties of the stage-2 objective, measured rather
 than assumed: moving a share toward its target cuts L1 tracking error by its
 price over the book value, more than any realistic per-share fee, so the cost
 term barely moves the answer (in the test universe it took $20 a share) and
@@ -372,6 +430,15 @@ python -m benchmarks.run_benchmarks --sizes 50 500 3000 --days 2520 --runs 5 --e
 
 ```bash
 python -m benchmarks.run_lot_rounding --sizes 50 200 500 --out benchmarks/results/<host>-lots
+```
+
+The NIM explainer needs an endpoint rather than a GPU: NVIDIA's hosted API
+with a key from [build.nvidia.com](https://build.nvidia.com) in
+`NVIDIA_API_KEY` (read from the environment, never written to the results), or
+a local NIM container via `--endpoint`:
+
+```bash
+python -m explainer.run_explainer --out benchmarks/results/nim-hosted
 ```
 
 Results land in `benchmarks/results/` as CSVs plus an `environment.json`

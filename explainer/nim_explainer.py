@@ -3,33 +3,37 @@
 Scope is deliberately small. This is an explanation layer over a real
 optimization engine, not the point of the project. It takes structured facts
 that the optimizer already computed — which constraints bound, which positions
-moved, where risk concentrated — and asks a local model to phrase them.
+moved, where risk concentrated — and asks a NIM-served model to phrase them.
 
 Design constraint that matters: **the model is never asked to compute
 anything.** Every number in the prompt is produced by the optimizer and passed
 in as text. An LLM asked to derive risk contributions would produce fluent
 arithmetic errors, and the resulting explanation would be worse than none.
+``unsupported_numbers`` measures how well a model keeps to that.
 
-Run a NIM locally (single GPU is enough for Nemotron Nano):
-
-    docker run --gpus all -p 8000:8000 \\
-        -e NGC_API_KEY=$NGC_API_KEY \\
-        nvcr.io/nim/nvidia/nemotron-3-nano-instruct:latest
-
-The client below speaks the OpenAI-compatible API that NIM exposes, so it also
-works against any other OpenAI-compatible endpoint.
+The default endpoint is NVIDIA's hosted API (a key from build.nvidia.com,
+passed as ``api_key``). The client speaks the OpenAI-compatible API that NIM
+exposes, so a self-hosted NIM container or any other compatible endpoint works
+through ``endpoint``. Self-hosting is not an option on this project's 8 GB
+RTX 4060: the Nemotron 3 Nano NIM (``nvcr.io/nim/nvidia/nemotron-3-nano``) is
+a 30B-parameter model, and NVIDIA validates no LLM NIM on an 8 GB GPU.
 """
 
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import dataclass, field
 
 import numpy as np
 
-DEFAULT_ENDPOINT = "http://localhost:8000/v1/chat/completions"
-DEFAULT_MODEL = "nvidia/nemotron-3-nano-instruct"
+DEFAULT_ENDPOINT = "https://integrate.api.nvidia.com/v1/chat/completions"
+# Nemotron 3.5 Lightning: its model card lists plain instruction following,
+# and with thinking switched off (see explain) the whole token budget goes to
+# the answer. The name this file used to carry, nemotron-3-nano-instruct, was
+# never a NIM model.
+DEFAULT_MODEL = "nvidia/nemotron-3.5-lightning-30b-a3b"
 
 SYSTEM_PROMPT = """You explain portfolio rebalances to an investment committee.
 
@@ -145,12 +149,15 @@ def explain(
     model: str = DEFAULT_MODEL,
     temperature: float = 0.2,
     timeout: float = 60.0,
+    api_key: str | None = None,
 ) -> tuple[str, dict]:
     """Send facts to a NIM endpoint. Returns (explanation, latency/usage metrics).
 
     Latency and token counts come back alongside the text so the explainer can
     be entered in the same benchmark table as every other stage — the project
-    measures this component the way it measures the rest.
+    measures this component the way it measures the rest. ``api_key`` is sent
+    as a bearer token, which NVIDIA's hosted endpoints require and a local NIM
+    container does not.
     """
     import requests
 
@@ -162,13 +169,34 @@ def explain(
         ],
         "temperature": temperature,
         "max_tokens": 400,
+        # One complete JSON reply (NVIDIA's hosted API streams by default), and
+        # no thinking: Nemotron 3 models think by default and that counts
+        # against max_tokens, so a 400-token budget can end before any answer.
+        "stream": False,
+        "chat_template_kwargs": {"enable_thinking": False},
     }
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
     t0 = time.perf_counter()
-    response = requests.post(endpoint, json=payload, timeout=timeout)
+    response = requests.post(endpoint, json=payload, headers=headers, timeout=timeout)
     latency = time.perf_counter() - t0
-    response.raise_for_status()
+    if not response.ok:
+        # Keep the endpoint's own reason: a bare "401 Unauthorized" cannot say
+        # whether a key is wrong, expired or scoped to the wrong service.
+        raise requests.HTTPError(
+            f"{response.status_code} {response.reason} from {endpoint}: {response.text[:300]}",
+            response=response,
+        )
     body = response.json()
+
+    choice = body["choices"][0]
+    if choice.get("finish_reason") == "length":
+        raise RuntimeError(f"{model}'s reply was cut off at max_tokens")
+    # A reasoning model may think inside <think> tags or spend the whole token
+    # budget thinking; neither is an explanation.
+    text = re.sub(r"<think>.*?</think>", "", choice["message"].get("content") or "", flags=re.S).strip()
+    if not text:
+        raise RuntimeError(f"{model} returned no text (finish_reason={choice.get('finish_reason')})")
 
     usage = body.get("usage", {})
     metrics = {
@@ -178,7 +206,28 @@ def explain(
         "tokens_per_second": usage.get("completion_tokens", 0) / latency if latency else 0.0,
         "model": model,
     }
-    return body["choices"][0]["message"]["content"].strip(), metrics
+    return text, metrics
+
+
+# A number not glued to a word: 12.34, -2.54, 2026 — but not the 00001 in SYN00001.
+_NUMBER = re.compile(r"(?<![\w.])[-+]?\d+(?:\.\d+)?")
+
+
+def unsupported_numbers(explanation: str, facts: RebalanceFacts) -> list[str]:
+    """Numbers in an explanation that no fact supports, even after rounding.
+
+    The design rule is that the model phrases the optimizer's numbers and never
+    produces its own; this measures how often that held. A number counts as
+    supported if some number in the facts rounds to it at the precision the
+    explanation wrote, ignoring sign — a -2.54% change is a "2.5% decrease".
+    """
+    given = [abs(float(token)) for token in _NUMBER.findall(facts.to_prompt())]
+    unsupported = []
+    for token in _NUMBER.findall(explanation):
+        decimals = len(token.split(".")[1]) if "." in token else 0
+        if not any(round(value, decimals) == abs(float(token)) for value in given):
+            unsupported.append(token)
+    return unsupported
 
 
 def explain_offline(facts: RebalanceFacts) -> tuple[str, dict]:

@@ -11,6 +11,7 @@ from benchmarks.render_tables import (
     StaleBlocks,
     backtest_table,
     lot_rounding_tables,
+    nim_explainer_tables,
     replace_block,
     speedup_tables,
     sync_file,
@@ -138,11 +139,30 @@ def test_lot_rounding_table_sets_each_mip_budget_rule_against_greedy(tmp_path):
 
     text = lot_rounding_tables(tmp_path)
 
+    # Results from before the cash band existed render with its columns empty.
     assert "NVIDIA GeForce RTX 4060 Laptop GPU" in text
-    assert ("| 50 | none | 1 | 0.64% | 0.61% (4.7% better) | 0.5% (22% better) | 0.002% / 0.33% "
-            "| 2.50 s / 10.0 ms |") in text
-    assert "| 200 | 0.25 | 100 | 112% | 116% (3.6% worse) † | no solution | 0.004% / — | 60.00 s / — |" in text
+    assert ("| 50 | none | 1 | 0.64% | 0.61% (4.7% better) | — | 0.5% (22% better) "
+            "| 0.002% / — / 0.33% | 2.50 s / — / 10.0 ms |") in text
+    assert ("| 200 | 0.25 | 100 | 112% | 116% (3.6% worse) † | — | no solution "
+            "| 0.004% / — / — | 60.00 s / — / — |") in text
     assert "† " in text.splitlines()[-1]  # the time-limit footnote, only when needed
+
+
+def test_lot_rounding_table_shows_the_cash_band_between_the_other_rules(tmp_path):
+    host = tmp_path / "rtx-wsl2-lots"
+    host.mkdir()
+    (host / "environment.json").write_text(json.dumps({"gpu": "NVIDIA GeForce RTX 4060 Laptop GPU"}))
+    pd.DataFrame([
+        _lot_row(50, None, 10, "greedy", "Greedy", 0.061, 0.00008, 0.0),
+        _lot_row(50, None, 10, "mip_fully_invested", "Optimal", 0.0611, 0.0, 4.2),
+        _lot_row(50, None, 10, "mip_cash_band", "Optimal", 0.0574, 0.005, 1.5),
+        _lot_row(50, None, 10, "mip_cash_allowed", "Optimal", 0.0511, 0.025, 8.2),
+    ]).to_csv(host / "lot_rounding.csv", index=False)
+
+    row = [line for line in lot_rounding_tables(tmp_path).splitlines() if line.startswith("| 50 |")][0]
+
+    assert row == ("| 50 | none | 10 | 6.1% | 6.1% (0.16% worse) | 5.7% (5.9% better) | 5.1% (16% better) "
+                   "| 0.008% / 0.5% / 2.5% | 4.20 s / 1.50 s / 8.20 s |")
 
 
 def test_lot_rounding_table_never_rounds_a_loss_into_a_tie(tmp_path):
@@ -160,6 +180,29 @@ def test_lot_rounding_table_never_rounds_a_loss_into_a_tie(tmp_path):
     row = [line for line in lot_rounding_tables(tmp_path).splitlines() if line.startswith("| 50 |")][0]
 
     assert "(0.2% worse)" in row and "(2.2% better)" in row
+
+
+def test_nim_table_reports_latency_throughput_and_unsupported_numbers(tmp_path):
+    run = tmp_path / "nim-hosted"
+    run.mkdir()
+    (run / "explanations.json").write_text(json.dumps({
+        "endpoint": "https://integrate.api.nvidia.com/v1/chat/completions", "model": "some/model",
+        "runs": [
+            {"latency_s": 1.0, "tokens_per_second": 80.0, "explanation": "First.", "unsupported_numbers": []},
+            {"latency_s": 3.0, "tokens_per_second": 60.0, "explanation": "Second.", "unsupported_numbers": ["0.57"]},
+            {"error": "HTTPError: 429 Too Many Requests"},
+        ],
+    }))
+
+    text = nim_explainer_tables(tmp_path)
+
+    assert "**some/model** — NVIDIA hosted API — `benchmarks/results/nim-hosted/`" in text
+    assert "| 2 of 3 | 2.00 s | 70 | 1 of 2 (0.57) |" in text
+    assert "> First." in text
+
+
+def test_nim_table_says_so_when_nothing_has_run(tmp_path):
+    assert "No NIM explainer results" in nim_explainer_tables(tmp_path)
 
 
 def test_lot_rounding_table_skips_hosts_that_only_ran_greedy(tmp_path):

@@ -26,6 +26,13 @@ import numpy as np
 
 from optimizer.cuopt_compat import CuOptApi, is_optimal, load_cuopt, status_name
 
+# Default budget band: invest between 99.5% and 100% of the book. Wide enough
+# that the optimum no longer hinges on a solver's feasibility tolerance, wide
+# enough to admit greedy's leftover cash in every case measured on the RTX 4060
+# (0.13% at most), and narrow enough that the MIP cannot buy tracking error
+# with idle cash.
+DEFAULT_MAX_CASH = 0.005
+
 
 @dataclass(frozen=True)
 class LotSolution:
@@ -48,7 +55,7 @@ def solve_lot_rounding_cuopt(
     cost_per_share: float = 0.0,
     max_trades: int | None = None,
     time_limit: float = 60.0,
-    allow_cash: bool = False,
+    max_cash: float = DEFAULT_MAX_CASH,
     api: CuOptApi | None = None,
 ) -> LotSolution:
     """Round ``target_weights`` to integer lots with a cuOpt MIP.
@@ -66,16 +73,18 @@ def solve_lot_rounding_cuopt(
     units and the sum is meaningful; mixing dollars and weights in one linear
     objective would make the relative weighting arbitrary.
 
-    Budget. By default realized weights must sum to exactly 1. Integer lots at
-    market prices almost never hit that exactly, so it holds only to within
-    the solver's feasibility tolerance, and that tolerance rather than the
-    portfolio then decides the answer (measured in the README: cuOpt and
-    HiGHS disagree by as much as 6.4%). ``round_lots_greedy`` is never held
-    to it at all: it spends *at most* the portfolio value and keeps the
-    remainder as cash. ``allow_cash=True`` applies greedy's rule, sum <= 1,
-    under which greedy's answer is always feasible here, so the MIP cannot do
-    worse on tracking error. The price is that it may leave more cash, since
-    the objective counts uninvested weight only as the shortfall on targets.
+    Budget. Realized weights must sum to between ``1 - max_cash`` and 1. The
+    two ends of that range were measured on the RTX 4060 (see the README) and
+    both fail as a default. ``max_cash=0``, exactly fully invested, is met by
+    integer lots at market prices only to within the solver's feasibility
+    tolerance, which then decides the answer (cuOpt and HiGHS disagreed by as
+    much as 6.4%); and it loses to ``round_lots_greedy``, which may keep cash.
+    ``max_cash=1`` is greedy's own rule, sum <= 1, so greedy's answer is always
+    feasible and the MIP cannot track worse; but the objective counts idle
+    cash only as the shortfall on targets, so at coarse lot sizes the optimum
+    can be mostly cash. A band between them is well-posed, caps cash at
+    ``max_cash``, and admits greedy's answer whenever greedy keeps no more
+    than ``max_cash`` in cash.
 
     ``api`` defaults to the installed cuOpt; tests pass a stand-in to solve
     the same model without a GPU.
@@ -87,6 +96,8 @@ def solve_lot_rounding_cuopt(
         raise ValueError(f"{len(prices)} prices for {n} target weights")
     if np.any(prices <= 0):
         raise ValueError("all prices must be positive")
+    if not 0.0 <= max_cash <= 1.0:
+        raise ValueError(f"max_cash must be between 0 and 1, got {max_cash}")
 
     prev_shares = np.zeros(n) if prev_shares is None else np.asarray(prev_shares, dtype=np.float64)
 
@@ -118,9 +129,16 @@ def solve_lot_rounding_cuopt(
         prob.addConstraint(dev[i] - lw * lots[i] >= -tgt, name=f"dev_pos_{i}")
         prob.addConstraint(dev[i] + lw * lots[i] >= tgt, name=f"dev_neg_{i}")
 
-    # Budget: realized weights sum to 1, or to at most 1 when cash is allowed.
-    budget = api.LinearExpression(lots, [float(w) for w in lot_weight], 0.0)
-    prob.addConstraint(budget <= 1.0 if allow_cash else budget == 1.0, name="budget")
+    # Budget: invested between 1 - max_cash and 1, exactly 1 when max_cash is 0.
+    def invested():
+        return api.LinearExpression(lots, [float(w) for w in lot_weight], 0.0)
+
+    if max_cash == 0.0:
+        prob.addConstraint(invested() == 1.0, name="budget")
+    else:
+        prob.addConstraint(invested() <= 1.0, name="budget")
+        if max_cash < 1.0:
+            prob.addConstraint(invested() >= 1.0 - max_cash, name="min_invested")
 
     trade_vars: list = []
     if cost_per_share > 0.0 or max_trades is not None:

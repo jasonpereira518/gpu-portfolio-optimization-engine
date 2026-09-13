@@ -1,0 +1,47 @@
+{
+  "endpoint": "https://integrate.api.nvidia.com/v1/chat/completions",
+  "model": "nvidia/nemotron-3.5-lightning-30b-a3b",
+  "timestamp": "2026-09-12T20:43:39-0400",
+  "client": "Linux-6.18.33.2-microsoft-standard-WSL2-x86_64-with-glibc2.39, Python 3.12.3",
+  "facts": "{\n  \"rebalance_date\": \"2018-10-31\",\n  \"universe_size\": 40,\n  \"turnover\": \"25.00%\",\n  \"transaction_cost\": \"0.0250% of portfolio value\",\n  \"expected_annual_return\": \"56.72%\",\n  \"expected_annual_volatility\": \"30.22%\",\n  \"largest_increases\": \"SYN00000 +12.10%, SYN00038 +0.40%\",\n  \"largest_decreases\": \"SYN00025 -7.24%, SYN00003 -5.26%\",\n  \"binding_constraints\": [\n    \"position cap of 15.0% binding on 5 names\",\n    \"long-only floor binding on 30 names (excluded)\",\n    \"turnover budget of 25.0% fully used\"\n  ],\n  \"largest_risk_contributors\": \"SYN00000 24.0% of portfolio variance, SYN00009 17.4% of portfolio variance, SYN00007 15.5% of portfolio variance, SYN00024 14.4% of portfolio variance, SYN00017 11.0% of portfolio variance\"\n}",
+  "offline_template": "On 2018-10-31 the portfolio was re-optimized across 40 assets, turning over 25.0% at a cost of 0.025%. Largest increases: SYN00000 (+12.1%), SYN00038 (+0.4%). Largest decreases: SYN00025 (-7.2%), SYN00003 (-5.3%). Constraints: position cap of 15.0% binding on 5 names; long-only floor binding on 30 names (excluded); turnover budget of 25.0% fully used. Expected annual return is 56.7% at 30.2% volatility, with risk concentrated in SYN00000 (24.0%), SYN00009 (17.4%), SYN00007 (15.5%).",
+  "runs": [
+    {
+      "error": "ReadTimeout: HTTPSConnectionPool(host='integrate.api.nvidia.com', port=443): Read timed out. (read timeout=60.0)"
+    },
+    {
+      "latency_s": 33.95832294399952,
+      "prompt_tokens": 430,
+      "completion_tokens": 122,
+      "tokens_per_second": 3.5926391359546677,
+      "model": "nvidia/nemotron-3.5-lightning-30b-a3b",
+      "explanation": "The rebalance on 2018-10-31 used the full 25% turnover budget, which drove the portfolio's expected annual return to 56.72% and volatility to 30.22%. Position caps of 15% were binding on five names, while a long-only floor excluded 30 names from the universe of 40. Risk is concentrated in SYN00000, which alone contributes 24.0% of the portfolio's variance, with the top five names accounting for the majority of variance.",
+      "unsupported_numbers": []
+    },
+    {
+      "latency_s": 57.037390351000795,
+      "prompt_tokens": 430,
+      "completion_tokens": 108,
+      "tokens_per_second": 1.8934947643183153,
+      "model": "nvidia/nemotron-3.5-lightning-30b-a3b",
+      "explanation": "The rebalance on 2018-10-31 reduced portfolio turnover to exactly 25.00%, fully exhausting the turnover budget. Position caps of 15.0% were binding on five names, and a long-only floor excluded 30 securities from the optimized universe. Risk is concentrated in SYN00000, which alone contributed 24.0% of portfolio variance, with the top five risk contributors accounting for 81.9% of total variance.",
+      "unsupported_numbers": [
+        "81.9"
+      ]
+    },
+    {
+      "latency_s": 32.260254736000206,
+      "prompt_tokens": 430,
+      "completion_tokens": 118,
+      "tokens_per_second": 3.657751650309202,
+      "model": "nvidia/nemotron-3.5-lightning-30b-a3b",
+      "explanation": "The October 2018 rebalance increased portfolio turnover to 25.0%, fully exhausting the turnover budget and incurring transaction costs of 0.0250% of portfolio value. Position caps of 15.0% were binding on five names, while a long-only floor constraint excluded 30 securities from the optimized universe. Risk is concentrated in SYN00000, which alone contributed 24.0% of portfolio variance, with the top five risk contributors accounting for 81.9% of total variance.",
+      "unsupported_numbers": [
+        "81.9"
+      ]
+    },
+    {
+      "error": "RuntimeError: nvidia/nemotron-3.5-lightning-30b-a3b's reply was cut off at max_tokens"
+    }
+  ]
+}

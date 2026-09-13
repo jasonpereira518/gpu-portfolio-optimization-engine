@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import statistics
 import sys
 from pathlib import Path
 
@@ -150,7 +151,8 @@ def speedup_tables(results: Path) -> str:
     return "\n\n".join(sections)
 
 
-LOT_MIP_METHODS = ("mip_fully_invested", "mip_cash_allowed")
+# Budget rules in column order: exact investment, the default band, any cash.
+LOT_MIP_METHODS = ("mip_fully_invested", "mip_cash_band", "mip_cash_allowed")
 
 
 def _pct_of_book(value: float) -> str:
@@ -168,7 +170,9 @@ def _mip_cell(row, greedy_error: float) -> str:
     Stated as "x% better/worse" rather than a ratio: at two decimals a 0.2%
     loss prints as 1.00×, indistinguishable from a win.
     """
-    if row is None or pd.isna(row["tracking_error"]):
+    if row is None:
+        return "—"  # this rule was not run
+    if pd.isna(row["tracking_error"]):
         return "no solution"
     change = (row["tracking_error"] / greedy_error - 1.0) * 100
     versus = "same" if change == 0 else f"{abs(change):.2g}% {'worse' if change > 0 else 'better'}"
@@ -191,24 +195,24 @@ def lot_rounding_tables(results: Path) -> str:
             f"**{env.get('gpu', 'unknown GPU')}** — ${rows['portfolio_value'].iloc[0] / 1e6:g}M book "
             f"— `benchmarks/results/{host.name}/`",
             "",
-            "| assets | turnover cap | lot | greedy | MIP, fully invested | MIP, cash allowed "
-            "| cash left: greedy / MIP, cash allowed | MIP solve: fully invested / cash allowed |",
-            "|---|---|---|---|---|---|---|---|",
+            "| assets | turnover cap | lot | greedy | MIP, fully invested | MIP, cash band | MIP, cash allowed "
+            "| cash left: greedy / band / cash allowed | MIP solve: fully invested / band / cash allowed |",
+            "|---|---|---|---|---|---|---|---|---|",
         ]
         time_limited = False
         rows["cap"] = rows["turnover_budget"].fillna(-1.0)  # uncapped sorts first
         for (n, cap, lot), case in rows.groupby(["n_assets", "cap", "lot_size"]):
             by = {r["method"]: r for _, r in case.iterrows()}
             greedy = by["greedy"]
-            full, cash = by.get("mip_fully_invested"), by.get("mip_cash_allowed")
-            mips = [_mip_cell(full, greedy["tracking_error"]), _mip_cell(cash, greedy["tracking_error"])]
-            time_limited |= any(cell.endswith("†") for cell in mips)
-            cash_left = _pct_of_book(np.nan if cash is None else cash["cash"])
-            solve = [_seconds(np.nan if r is None else r["solve_s"]) for r in (full, cash)]
+            mips = [by.get(method) for method in LOT_MIP_METHODS]
+            cells = [_mip_cell(r, greedy["tracking_error"]) for r in mips]
+            time_limited |= any(cell.endswith("†") for cell in cells)
+            cash_left = [_pct_of_book(np.nan if r is None else r["cash"]) for r in mips[1:]]
+            solve = [_seconds(np.nan if r is None else r["solve_s"]) for r in mips]
             lines.append(
                 f"| {n} | {'none' if cap < 0 else f'{cap:.2f}'} | {lot} | "
-                f"{_pct_of_book(greedy['tracking_error'])} | {mips[0]} | {mips[1]} | "
-                f"{_pct_of_book(greedy['cash'])} / {cash_left} | {solve[0]} / {solve[1]} |"
+                f"{_pct_of_book(greedy['tracking_error'])} | {' | '.join(cells)} | "
+                f"{' / '.join([_pct_of_book(greedy['cash']), *cash_left])} | {' / '.join(solve)} |"
             )
         if time_limited:
             lines += ["", "† hit the time limit: the best solution found is shown, not a proven optimum."]
@@ -217,6 +221,48 @@ def lot_rounding_tables(results: Path) -> str:
         return ("_No lot-rounding results committed yet — run `benchmarks.run_lot_rounding` on a GPU "
                 "host (see [docs/setup-wsl2.md](docs/setup-wsl2.md)). This table is generated from "
                 "`benchmarks/results/`, so it fills in when they are._")
+    return "\n\n".join(sections)
+
+
+def nim_explainer_tables(results: Path) -> str:
+    """The NIM explainer against a real endpoint, one table per recorded run."""
+    sections = []
+    for run_dir in sorted(p for p in results.iterdir() if p.is_dir()):
+        record_json = run_dir / "explanations.json"
+        if not record_json.exists():
+            continue
+        record = json.loads(record_json.read_text())
+        runs = record["runs"]
+        answered = [run for run in runs if "explanation" in run]
+        hosted = "integrate.api.nvidia.com" in record["endpoint"]
+        lines = [
+            f"**{record['model']}** — {'NVIDIA hosted API' if hosted else '`' + record['endpoint'] + '`'} "
+            f"— `benchmarks/results/{run_dir.name}/`",
+            "",
+            "| calls answered | median latency | median tokens/s | replies with numbers the facts don't support |",
+            "|---|---|---|---|",
+        ]
+        if not answered:
+            lines.append(f"| 0 of {len(runs)} | — | — | — |")
+        else:
+            flagged = [run for run in answered if run["unsupported_numbers"]]
+            numbers = sorted({n for run in flagged for n in run["unsupported_numbers"]})
+            unsupported = f"{len(flagged)} of {len(answered)}"
+            if numbers:
+                unsupported += " (" + ", ".join(numbers) + ")"
+            lines += [
+                f"| {len(answered)} of {len(runs)} "
+                f"| {_seconds(statistics.median(run['latency_s'] for run in answered))} "
+                f"| {statistics.median(run['tokens_per_second'] for run in answered):.0f} "
+                f"| {unsupported} |",
+                "",
+                "> " + answered[0]["explanation"].replace("\n", " "),
+            ]
+        sections.append("\n".join(lines))
+    if not sections:
+        return ("_No NIM explainer results committed yet — run `python -m explainer.run_explainer` "
+                "against an endpoint. This table is generated from `benchmarks/results/`, so it fills "
+                "in when they are._")
     return "\n\n".join(sections)
 
 
@@ -229,6 +275,7 @@ def main() -> int:
         "backtest-summary": backtest_table(RESULTS, BACKTESTS),
         "gpu-speedup": speedup_tables(RESULTS),
         "lot-rounding": lot_rounding_tables(RESULTS),
+        "nim-explainer": nim_explainer_tables(RESULTS),
     }
     unused = [name for name in blocks
               if not any(_markers(name)[0] in doc.read_text() for doc in DOCS)]
