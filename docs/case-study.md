@@ -156,8 +156,16 @@ That was the finding. Run on an RTX 4060, the MIP as designed — fully
 invested — lost to greedy in 17 of 18 cases, and the fault was the budget
 rule: greedy may keep cash and the MIP may not, and a sum of integer lots at
 market prices meets 1 only to within a solver's feasibility tolerance, which
-then picks the answer. Allowed greedy's own rule, the MIP wins every case, at
-coarse lot sizes mostly by holding cash. The README's lot-rounding table and
+then picks the answer. Under greedy's own rule the MIP wins, but at coarse lot
+sizes it does so mostly by holding cash.
+
+The default budget is now a cash band, invested between 99.5% and 100%. That
+problem is well-posed, and greedy's answer is feasible for it whenever greedy
+keeps 0.5% cash or less, so the comparison is fair. Under the band the MIP beat
+greedy in all 18 cases, but by under 1% in 13 of them. cuOpt also needed its
+full 60 s in 7 cases, where CPU HiGHS proved 5 of those 7 optimal in seconds.
+The honest summary is that the MIP layer earns a small, consistent edge, and
+that a GPU does not pay off at this size. The README's lot-rounding table and
 item 4 of "What is actually engineered here" have the numbers.
 
 ## The test that had to be adversarial
@@ -259,17 +267,20 @@ The fixes are structural, so the bug cannot quietly come back:
 
 ## Open items
 
-- A second GPU. Every component but the NIM explainer has now run, parity
-  first, on one RTX 4060 Laptop GPU under WSL2 (see the README); a
-  data-center GPU on native Linux is the obvious next data point.
+- A second GPU. Every GPU component has now run, parity first, on one RTX
+  4060 Laptop GPU under WSL2 (see the README). A data-center GPU on native
+  Linux is the obvious next data point, and it is also where a local NIM
+  could be measured: no LLM NIM is validated on an 8 GB card, so the
+  explainer has run only against NVIDIA's hosted API.
+- Whether the explainer earns its place. On the hosted run, two of three
+  replies summed risk shares they were told only to quote, and got the sum
+  wrong. The template fallback has no such failure mode. The explainer would
+  need a model that keeps to the facts before it is worth more than the
+  template.
 - The n = 50 crossover point. Expected to favor CPU; worth knowing precisely
   where it flips.
 - Whether the dense n² covariance hand-off to cuOpt's Python layer becomes the
   binding constraint at n = 3,000. If model construction dominates solve time,
   the interesting engineering moves to the MPS path or a sparse formulation.
-- A stage-2 budget rule that is neither tolerance-defined nor cash-hoarding:
-  a cash band, invested between 1 − c and 1, sits between the two rules
-  measured, and greedy's answer is feasible for it whenever greedy keeps no
-  more than c in cash.
 - A turnover cap enforced in stage 2 itself, which rounding currently
   overshoots by up to its rounding error.
