@@ -74,7 +74,8 @@ def main(argv: list[str] | None = None) -> int:
         try:
             text, metrics = explain(facts, endpoint=args.endpoint, model=args.model, api_key=api_key)
         except Exception as exc:  # recorded, not hidden: a failed call is a result too
-            runs.append({"error": f"{type(exc).__name__}: {exc}"})
+            error = f"{type(exc).__name__}: {exc}"
+            runs.append({"error": error.replace(api_key, "[key redacted]") if api_key else error})
             continue
         runs.append({**metrics, "explanation": text, "unsupported_numbers": unsupported_numbers(text, facts)})
 

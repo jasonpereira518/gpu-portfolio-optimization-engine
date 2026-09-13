@@ -180,7 +180,13 @@ def explain(
     t0 = time.perf_counter()
     response = requests.post(endpoint, json=payload, headers=headers, timeout=timeout)
     latency = time.perf_counter() - t0
-    response.raise_for_status()
+    if not response.ok:
+        # Keep the endpoint's own reason: a bare "401 Unauthorized" cannot say
+        # whether a key is wrong, expired or scoped to the wrong service.
+        raise requests.HTTPError(
+            f"{response.status_code} {response.reason} from {endpoint}: {response.text[:300]}",
+            response=response,
+        )
     body = response.json()
 
     choice = body["choices"][0]

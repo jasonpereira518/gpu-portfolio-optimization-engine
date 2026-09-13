@@ -101,10 +101,13 @@ def test_explain_authenticates_only_when_given_a_key(endpoint):
     assert "Authorization" not in without_key
 
 
-def test_explain_raises_when_the_endpoint_refuses(endpoint):
+def test_explain_raises_with_the_endpoints_own_reason_when_refused(endpoint):
+    """A bare "401 Unauthorized" cannot say whether the key is wrong, expired
+    or scoped to the wrong service; the endpoint's reply usually can."""
     endpoint.status = 401
+    endpoint.reply = {"status": 401, "title": "Unauthorized", "detail": "Authentication failed"}
 
-    with pytest.raises(requests.HTTPError):
+    with pytest.raises(requests.HTTPError, match="Authentication failed"):
         explain(FACTS, endpoint=endpoint.url)
 
 
@@ -166,6 +169,23 @@ def test_the_runner_records_every_reply_and_never_writes_the_key(endpoint, tmp_p
     assert record["model"] == "some/model" and record["facts"]
     assert all(r["headers"]["Authorization"] == "Bearer not-a-real-key" for r in endpoint.requests)
     assert "not-a-real-key" not in (out / "explanations.json").read_text()
+
+
+def test_the_runner_redacts_the_key_from_a_recorded_error(endpoint, tmp_path, monkeypatch):
+    """Failed calls are recorded with the endpoint's reason, so an endpoint
+    that echoed the credential back must not get it into the results file."""
+    from explainer import run_explainer
+
+    monkeypatch.setenv("NVIDIA_API_KEY", "not-a-real-key")
+    endpoint.status = 401
+    endpoint.reply = {"detail": "key not-a-real-key is not authorized"}
+    out = tmp_path / "nim"
+
+    run_explainer.main(["--endpoint", endpoint.url, "--runs", "1", "--out", str(out)])
+
+    written = (out / "explanations.json").read_text()
+    assert "not authorized" in written
+    assert "not-a-real-key" not in written
 
 
 def test_the_runner_refuses_the_hosted_endpoint_without_a_key(tmp_path, monkeypatch):
