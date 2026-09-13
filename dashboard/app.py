@@ -12,21 +12,19 @@ come from the benchmark suite, shown at the bottom.
 from __future__ import annotations
 
 import functools
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import streamlit as st
 
 from backtest.engine import compare_results, equal_weight_benchmark, run_backtest
+from benchmarks.render_tables import RESULTS, gpu_sweeps
 from data.universe import synthetic_prices
 from optimizer.cuopt_compat import cuopt_available
 from optimizer.mean_variance_cpu import solve_mean_variance_cpu
 from optimizer.spec import PortfolioSpec
 from pipeline.cpu_baseline import build_risk_model
 from pipeline.gpu_pipeline import rapids_available
-
-RESULTS_DIR = Path(__file__).resolve().parent.parent / "benchmarks" / "results"
 
 st.set_page_config(page_title="GPU Portfolio & Risk Engine", layout="wide")
 st.title("GPU Portfolio & Risk Decision Engine")
@@ -150,17 +148,23 @@ if st.button("Run backtest", type="primary"):
     )
 
 # --------------------------------------------------------------------------
-# Benchmark table, if a sweep has been run
+# Benchmark tables, one per GPU sweep under benchmarks/results/<host>/
 # --------------------------------------------------------------------------
 
 st.header("Benchmark results")
 
-speedup_csv = RESULTS_DIR / "speedup_table.csv"
-if speedup_csv.exists():
-    st.dataframe(pd.read_csv(speedup_csv))
-    env_json = RESULTS_DIR / "environment.json"
-    if env_json.exists():
-        with st.expander("Environment the numbers were produced on"):
-            st.json(env_json.read_text())
-else:
-    st.caption("No benchmark results yet — run `make bench` to generate them.")
+# The sweeps the README renders, under the README's labels: the GPU and
+# covariance estimator each sweep's own files recorded. A CPU-only sweep is a
+# baseline, not a speedup result, so it is not listed.
+sweeps = gpu_sweeps(RESULTS)
+for sweep in sweeps:
+    st.markdown(sweep.label)
+    st.dataframe(sweep.table, hide_index=True)
+    with st.expander("Environment the numbers were produced on"):
+        st.json(sweep.environment)
+if not sweeps:
+    st.caption(
+        "No GPU sweeps under `benchmarks/results/` yet — run one on a GPU host with "
+        "`--out benchmarks/results/<host>` (see docs/setup-wsl2.md). A CPU-only sweep "
+        "is a baseline, not a speedup result, so it is not listed here."
+    )

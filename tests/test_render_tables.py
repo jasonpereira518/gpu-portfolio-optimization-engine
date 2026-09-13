@@ -10,6 +10,7 @@ import pytest
 from benchmarks.render_tables import (
     StaleBlocks,
     backtest_table,
+    gpu_sweeps,
     lot_rounding_tables,
     nim_explainer_tables,
     replace_block,
@@ -116,6 +117,40 @@ def test_speedup_tables_name_the_covariance_estimator_each_sweep_used(tmp_path):
     assert len(headers) == 2
     assert "ledoit_wolf" in headers[0] and "pca_factor" not in headers[0]
     assert "pca_factor" in headers[1] and "ledoit_wolf" not in headers[1]
+
+
+def _write_sweep(results, name, gpu, estimator, gpu_column=True, environment=True):
+    host = results / name
+    host.mkdir()
+    if environment:
+        (host / "environment.json").write_text(json.dumps({"gpu": gpu}))
+    table = {"stage": ["risk_model"], "n_assets": [50], "n_days": [2520], "cpu": [0.002]}
+    if gpu_column:
+        table |= {"gpu": [0.2], "speedup": [0.01]}
+    pd.DataFrame(table).to_csv(host / "speedup_table.csv", index=False)
+    pd.DataFrame({"stage": ["risk_model"], "backend": ["cpu"], "n_assets": [50], "median_s": [0.002],
+                  "extra_estimator": [estimator]}).to_csv(host / "timings_raw.csv", index=False)
+
+
+def test_gpu_sweeps_are_the_hosts_that_timed_a_gpu_column_labeled_from_their_own_files(tmp_path):
+    """The enumeration the docs and the dashboard share: a directory counts only
+    if its numbers include a GPU column and its environment says what ran them."""
+    _write_sweep(tmp_path, "a100-pca", "NVIDIA A100-SXM4-40GB", "pca_factor")
+    _write_sweep(tmp_path, "rtx-wsl2", "NVIDIA GeForce RTX 4060 Laptop GPU", "ledoit_wolf")
+    # CPU-only sweep on a host that has a GPU: the GPU is real, the numbers are not from it.
+    _write_sweep(tmp_path, "t4-cpu-only", "Tesla T4", "ledoit_wolf", gpu_column=False)
+    _write_sweep(tmp_path, "unrecorded", "NVIDIA GeForce RTX 4060 Laptop GPU", "ledoit_wolf",
+                 environment=False)
+    lots = tmp_path / "rtx-wsl2-lots"  # a results directory with no speedup table
+    lots.mkdir()
+    (lots / "environment.json").write_text(json.dumps({"gpu": "NVIDIA GeForce RTX 4060 Laptop GPU"}))
+
+    sweeps = gpu_sweeps(tmp_path)
+
+    assert [(s.path.name, s.gpu, s.estimators) for s in sweeps] == [
+        ("a100-pca", "NVIDIA A100-SXM4-40GB", ["pca_factor"]),
+        ("rtx-wsl2", "NVIDIA GeForce RTX 4060 Laptop GPU", ["ledoit_wolf"]),
+    ]
 
 
 def _lot_row(n, budget, lot, method, status, te, cash, solve_s):

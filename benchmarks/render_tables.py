@@ -21,6 +21,7 @@ import json
 import re
 import statistics
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -118,9 +119,30 @@ def _estimators(host: Path) -> list[str]:
     return sorted(raw["extra_estimator"].dropna().unique())
 
 
-def speedup_tables(results: Path) -> str:
-    """One table per GPU sweep whose results are committed."""
-    sections = []
+@dataclass(frozen=True)
+class GpuSweep:
+    """A benchmark sweep that timed a GPU column, as its own files record it."""
+
+    path: Path
+    environment: dict
+    estimators: list[str]
+    table: pd.DataFrame  # speedup_table.csv, rows in pipeline-stage order
+
+    @property
+    def gpu(self) -> str:
+        return self.environment.get("gpu", "unknown GPU")
+
+    @property
+    def label(self) -> str:
+        """Markdown heading for the sweep's table; the docs and the dashboard both use it."""
+        # One GPU can have several sweeps (e.g. per estimator); say which this is.
+        estimator = "".join(f" `{e}` covariance —" for e in self.estimators)
+        return f"**{self.gpu}** —{estimator} `benchmarks/results/{self.path.name}/`"
+
+
+def gpu_sweeps(results: Path) -> list[GpuSweep]:
+    """Every per-host sweep under ``results`` that timed a GPU column."""
+    sweeps = []
     for host in sorted(p for p in results.iterdir() if p.is_dir() and p.name != "backtest"):
         table_csv, env_json = host / "speedup_table.csv", host / "environment.json"
         if not (table_csv.exists() and env_json.exists()):
@@ -128,19 +150,24 @@ def speedup_tables(results: Path) -> str:
         table = pd.read_csv(table_csv)
         if "gpu" not in table:
             continue  # a CPU-only sweep is a baseline, not a speedup result
-        env = json.loads(env_json.read_text())
-        table["order"] = table["stage"].map(
-            {s: i for i, s in enumerate(STAGE_ORDER)}).fillna(len(STAGE_ORDER))
-        table = table.sort_values(["order", "n_assets"])
-        # One GPU can have several sweeps (e.g. per estimator); say which this is.
-        estimator = "".join(f" `{e}` covariance —" for e in _estimators(host))
+        order = table["stage"].map({s: i for i, s in enumerate(STAGE_ORDER)}).fillna(len(STAGE_ORDER))
+        table = table.assign(order=order).sort_values(["order", "n_assets"]).drop(columns="order")
+        sweeps.append(GpuSweep(host, json.loads(env_json.read_text()), _estimators(host),
+                               table.reset_index(drop=True)))
+    return sweeps
+
+
+def speedup_tables(results: Path) -> str:
+    """One table per GPU sweep whose results are committed."""
+    sections = []
+    for sweep in gpu_sweeps(results):
         lines = [
-            f"**{env.get('gpu', 'unknown GPU')}** —{estimator} `benchmarks/results/{host.name}/`",
+            sweep.label,
             "",
             "| stage | assets | CPU | GPU | speedup |",
             "|---|---|---|---|---|",
         ]
-        for _, row in table.iterrows():
+        for _, row in sweep.table.iterrows():
             speedup = "—" if pd.isna(row.get("speedup")) else f"{row['speedup']:.2f}×"
             lines.append(f"| {row['stage']} | {int(row['n_assets'])} | {_seconds(row.get('cpu'))} "
                          f"| {_seconds(row['gpu'])} | {speedup} |")
