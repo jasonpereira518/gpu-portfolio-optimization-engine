@@ -40,6 +40,14 @@ Generated from the committed files in `benchmarks/results/` by
 `python -m benchmarks.render_tables` — never typed — and only after the
 parity checks pass on the same machine.
 
+![QP solve time, CPU vs GPU, at 50/500/3,000 assets for both covariance estimators — the GPU loses on overhead at 50 assets and wins by up to 2.66× at 3,000](docs/images/solve-benchmark.png)
+
+GPU overhead (kernel launch, host↔device transfer) dominates at 50 assets, so
+the GPU is *slower* there by design of the test, not by accident — see
+"[Benchmark methodology](#benchmark-methodology)". It crosses over between 500
+and 3,000 assets and wins by 2.48–2.66× at 3,000, depending on the covariance
+estimator.
+
 <!-- BEGIN GENERATED: gpu-speedup -->
 **NVIDIA GeForce RTX 4060 Laptop GPU, 8188 MiB, 592.82** — `ledoit_wolf` covariance — `benchmarks/results/rtx4060-wsl2/`
 
@@ -186,6 +194,8 @@ harness, dashboard — runs on any machine. Only the GPU column needs CUDA.
 ---
 
 ## Architecture
+
+![Architecture diagram: price data feeds cuDF/pandas features, then cuML/NumPy covariance, then a cuOpt/CVXPY mean-variance QP; an optional MIP rounds lots, then the backtest, benchmark table and dashboard consume the result](docs/images/architecture.png)
 
 ```
  Price data           cuDF / pandas         cuML / NumPy          cuOpt / CVXPY
