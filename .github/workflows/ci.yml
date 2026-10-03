@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  cpu:
+    # Everything that runs without a GPU: lint, the test suite (GPU tests skip),
+    # and the guard that the README/docs tables match the committed results.
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+      - run: python -m pip install -r requirements.txt -r requirements-dev.txt
+      - run: python -m ruff check .
+      - run: python -m pytest -q -rs
+      - run: python -m benchmarks.render_tables --check

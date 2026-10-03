@@ -1,0 +1,2 @@
+# Development tooling, on top of requirements.txt (which already carries pytest).
+ruff>=0.6
