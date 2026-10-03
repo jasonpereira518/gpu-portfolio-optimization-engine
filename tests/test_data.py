@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from data.universe import synthetic_prices
 from data.validate_data import clean_prices, validate_prices

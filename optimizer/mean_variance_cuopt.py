@@ -146,9 +146,7 @@ def solve_mean_variance_cuopt(
             settings.set_parameter("optimality_tolerance", optimality_tolerance)
     build_time = time.perf_counter() - build_t0
 
-    solve_t0 = time.perf_counter()
     prob.solve(settings)
-    wall_solve = time.perf_counter() - solve_t0
 
     if not is_optimal(prob):
         raise RuntimeError(
