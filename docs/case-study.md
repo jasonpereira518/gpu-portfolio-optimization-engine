@@ -1,4 +1,4 @@
-# Case study: building a GPU portfolio optimizer without a GPU
+# Case study: building a GPU portfolio optimizer, CPU baseline first
 
 *Working notes. This is the technical-blog-post version of the README —
 what was decided, what was measured, and what is still open.*
@@ -49,8 +49,8 @@ use this form. `test_ledoit_wolf_matches_naive_loop_implementation` pins the
 result to the literal loop version so the optimization cannot drift into a
 different estimator.
 
-The speedup this project eventually reports will be smaller because of that
-decision. It will also be real.
+The speedups this project reports are smaller because of that decision. They
+are also real.
 
 ## Reading the solver source, not just its reference
 
@@ -91,7 +91,7 @@ single sparse matrix rather than 9M nested Python floats.
 a quadratic matrix denotes `xᵀQx` or `½xᵀQx`; getting it wrong silently halves
 or doubles the effective risk aversion. NVIDIA's documentation states that cuOpt
 takes Q "without the 1/2 factor", i.e. `xᵀQx`, matching CVXPY's `quad_form`.
-`optimizer/cuopt_compat.py` still checks it at startup by solving
+`optimizer/cuopt_compat.py` still checks it, on first use, by solving
 
 ```
 minimize  q·x² − c·x    with q = c = 1,  x ∈ [0, 10]
@@ -267,6 +267,11 @@ The fixes are structural, so the bug cannot quietly come back:
 
 ## Open items
 
+- Why the GPU loses the data-preparation stages. On the RTX 4060 the GPU is
+  slower than the CPU at every size for `features` and `risk_model` (see the
+  README table); only the QP solve at 3,000 assets wins. Nobody has profiled it
+  yet. That needs the GPU machine, and until then it is a measurement, not an
+  explanation.
 - A second GPU. Every GPU component has now run, parity first, on one RTX
   4060 Laptop GPU under WSL2 (see the README). A data-center GPU on native
   Linux is the obvious next data point, and it is also where a local NIM

@@ -39,6 +39,8 @@ class LotSolution:
     shares: np.ndarray  # integer share counts
     weights: np.ndarray  # realized weights after rounding
     tracking_error: float  # L1 distance to target weights
+    # Names traded against ``prev_shares`` for the MIP; for the greedy rounder,
+    # which takes no prior holdings, the number of names held.
     n_trades: int
     transaction_cost: float
     solve_time: float
