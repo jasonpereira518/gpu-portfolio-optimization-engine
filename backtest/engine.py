@@ -17,7 +17,7 @@ day one is then being compared over a different period altogether.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Callable
 
 import numpy as np
@@ -52,6 +52,10 @@ class BacktestResult:
     returns: pd.Series  # daily net portfolio returns
     rebalances: list[RebalanceRecord] = field(default_factory=list)
     label: str = ""
+    # Rebalances whose risk model or solve raised: (date, reason). The previous
+    # weights were held through each, so a result with entries here is not the
+    # strategy it names on those dates.
+    failed_rebalances: list[tuple[pd.Timestamp, str]] = field(default_factory=list)
 
     # ---- performance statistics ----
 
@@ -116,6 +120,10 @@ class BacktestResult:
 
     def render(self) -> str:
         s = self.summary()
+        failed = (
+            f"  FAILED rebalances  {len(self.failed_rebalances):>9d}  (previous weights held)\n"
+            if self.failed_rebalances else ""
+        )
         return (
             f"{self.label or 'backtest'}\n"
             f"  total return       {s['total_return']:>9.2%}\n"
@@ -126,6 +134,7 @@ class BacktestResult:
             f"  avg turnover       {s['avg_turnover']:>9.2%}\n"
             f"  cost drag          {s['cost_drag']:>9.4f}\n"
             f"  rebalances         {int(s['n_rebalances']):>9d}\n"
+            f"{failed}"
             f"  total solve time   {s['total_solve_time']:>9.3f}s"
         )
 
@@ -166,9 +175,11 @@ def run_backtest(
         lookback_days: trailing window, in trading days, used to estimate risk.
         transaction_cost_bps: charged on one-way notional traded.
         apply_turnover_budget: carry ``spec.turnover_budget`` into each solve by
-            injecting the previous weights. Off by default because it makes each
-            rebalance depend on the last, which is realistic but makes CPU/GPU
-            comparison sensitive to any single divergent solve.
+            injecting the weights actually held. Off by default because it makes
+            each rebalance depend on the last, which is realistic but makes CPU/GPU
+            comparison sensitive to any single divergent solve. The first
+            rebalance is exempt: all-cash to invested is 100% turnover by
+            definition, so any smaller budget would make it infeasible.
 
     Returns:
         BacktestResult with net and gross equity curves and per-rebalance
@@ -192,6 +203,7 @@ def run_backtest(
 
     cost_rate = transaction_cost_bps / 1e4
     records: list[RebalanceRecord] = []
+    failures: list[tuple[pd.Timestamp, str]] = []
 
     # Weight vector aligned to the full ticker list; the investable subset can
     # change between rebalances as names gain or lose sufficient history.
@@ -225,22 +237,19 @@ def run_backtest(
                 model = risk_model_fn(trailing)
                 spec_now = base_spec
                 if apply_turnover_budget and base_spec.turnover_budget is not None:
-                    prev_aligned = np.array([current[ticker_pos[t]] for t in model.tickers])
-                    spec_now = PortfolioSpec(
-                        risk_aversion=base_spec.risk_aversion,
-                        max_weight=base_spec.max_weight,
-                        min_weight=base_spec.min_weight,
-                        turnover_budget=base_spec.turnover_budget,
-                        w_prev=prev_aligned,
-                        group_labels=base_spec.group_labels,
-                        group_max_weight=base_spec.group_max_weight,
-                    )
+                    if current.any():
+                        prev_aligned = np.array([current[ticker_pos[t]] for t in model.tickers])
+                        spec_now = replace(base_spec, w_prev=prev_aligned)
+                    else:  # nothing held yet: the budget cannot apply to the first purchase
+                        spec_now = replace(base_spec, turnover_budget=None, w_prev=None)
                 solution = solver_fn(model, spec_now)
             except Exception as exc:
                 # A failed solve holds the previous portfolio rather than going
                 # to cash — dropping to cash on a solver hiccup would put a
-                # numerical artifact straight into the equity curve.
+                # numerical artifact straight into the equity curve. It is
+                # recorded on the result so the hold is not invisible.
                 log.warning("rebalance %s failed (%s); holding previous weights", date.date(), exc)
+                failures.append((date, str(exc)))
                 next_mark += 1
                 continue
 
@@ -276,6 +285,7 @@ def run_backtest(
         returns=net,
         rebalances=records,
         label=label,
+        failed_rebalances=failures,
     )
 
 

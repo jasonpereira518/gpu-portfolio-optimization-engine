@@ -96,6 +96,26 @@ estimator.
 | solve_cvxpy | 3000 | 6.40 s | 4.76 s | 1.34× |
 <!-- END GENERATED: gpu-speedup -->
 
+What the stages are, and what the table does and does not show:
+
+- `h2d_transfer` — copying the pandas price frame to the GPU. GPU column only.
+- `features` — returns plus rolling volatility and momentum (cuDF vs pandas).
+- `risk_model` — prices to a `RiskModel`: returns, expected returns, covariance,
+  including the copy of the n×n matrix back to host (CuPy/cuML vs NumPy).
+- `psd_repair` — eigenvalue clipping on the covariance, which runs on the CPU on
+  both sides (and is a no-op for these two estimators), so it sits near 1× by
+  construction.
+- `solve` — the QP: CVXPY + Clarabel on CPU, cuOpt's own modeling layer on GPU.
+- `solve_cvxpy` — the GPU column goes through CVXPY with cuOpt underneath; its
+  CPU reference is the same Clarabel solve as `solve`.
+
+The QP solve at 3,000 assets is the only stage the GPU wins. It loses
+`features` at every size (0.02–0.03× for both estimators) and `risk_model` at
+every size (0.01–0.03× for Ledoit-Wolf, 0.06–0.37× for the PCA factor model),
+so the data-preparation half of the pipeline is slower on this card. That has
+**not been profiled**, so no cause is claimed here; it is the first open item
+in [docs/case-study.md](docs/case-study.md#open-items).
+
 ### Lot rounding: MIP vs greedy
 
 Stage 2 rounds the stage-1 weights to whole lots. Each row rounds one QP target
@@ -210,10 +230,14 @@ harness, dashboard — runs on any machine. Only the GPU column needs CUDA.
 ┌──────────────┐     ┌───────────────┐    ┌────────────────┐    ┌───────────────┐
 │ dashboard    │◀────│ benchmark     │◀───│ backtest:      │◀───│ MIP (opt.):   │
 │ (Streamlit)  │     │ table +       │    │ rolling        │    │ lot rounding, │
-│ + NIM        │     │ parity report │    │ rebalance, P&L │    │ turnover      │
-│  explainer   │     │               │    │ vs 1/N         │    │ limits        │
+│ CPU solves + │     │ parity report │    │ rebalance, P&L │    │ turnover      │
+│ GPU tables   │     │               │    │ vs 1/N         │    │ limits        │
 └──────────────┘     └───────────────┘    └────────────────┘    └───────────────┘
 ```
+
+The NIM explainer sits beside this pipeline rather than in it:
+[`explainer/run_explainer.py`](explainer/run_explainer.py) is a standalone CLI,
+and the dashboard does not call it.
 
 Both backends implement the same two interfaces — `RiskModel` in
 [`pipeline/risk_model.py`](pipeline/risk_model.py) and `PortfolioSpec` /
@@ -478,6 +502,10 @@ Stated here rather than discovered by a reader:
   with the optimizer taking about 8 points more volatility and six times the
   turnover — consistent with DeMiguel, Garlappi & Uppal (2009), and reported
   rather than tuned away.
+- **A real-data universe smaller than 500 is the alphabetically first n tickers.**
+  `--n 120` takes the first 120 symbols of the sorted S&P 500 list, not the 120
+  largest or a random sample, so the committed `sp500-120-snapshot` is a
+  convenience sample, not a representative one.
 - **The synthetic generator is a k-factor model with constant per-asset drift**,
   so it is generous to factor-based covariance estimators, and it makes
   historical means informative by construction — mean-variance "wins" there
@@ -499,14 +527,37 @@ optimizer/     spec.py (shared contract), mean_variance_cpu.py, mean_variance_cu
                turnover_mip_cuopt.py, cuopt_compat.py (version shim)
 backtest/      engine.py, run_backtest.py
 benchmarks/    harness.py, run_benchmarks.py, run_lot_rounding.py, render_tables.py (docs tables from results/), results/
-explainer/     nim_explainer.py
+explainer/     nim_explainer.py, run_explainer.py (records a run against an endpoint)
 dashboard/     app.py
-notebooks/     colab_gpu_runner.ipynb (second GPU data point on a free T4)
-docs/          case-study.md, setup-wsl2.md (Windows 11 + WSL2 GPU bring-up)
-tests/         test_data.py, test_risk_models.py, test_optimizer.py, test_backtest.py,
-               test_cuopt_formulation.py + fake_cuopt.py, test_lot_rounding.py, test_benchmarks.py,
-               test_render_tables.py
+notebooks/     colab_gpu_runner.ipynb (Colab T4 runner; its committed run timed only the CPU column)
+docs/          case-study.md, setup-wsl2.md (Windows 11 + WSL2 GPU bring-up),
+               images/ (render_architecture.py regenerates architecture.png)
+tests/         test_<module>.py, one per area; fake_cuopt.py is the stand-in for cuOpt's
+               model-building API that lets the formulation be tested without a GPU
+.github/       workflows/ci.yml (lint, tests, generated-table check on CPU)
 ```
+
+---
+
+## Development
+
+```bash
+make venv
+```
+
+```bash
+make check
+```
+
+`make venv` builds `.venv` from `requirements.txt` and `requirements-dev.txt`
+(`PYTHON=python3.12 make venv` picks the interpreter). `make check` runs what CI
+runs: ruff, the test suite (GPU tests skip off-GPU) and the generated-table check.
+
+---
+
+## License
+
+MIT — see [LICENSE](LICENSE).
 
 ---
 

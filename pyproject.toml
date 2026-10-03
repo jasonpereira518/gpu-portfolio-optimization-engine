@@ -1,0 +1,15 @@
+# Tool configuration only: this repo is run from its root (python -m ...), not installed.
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+extend-exclude = ["notebooks"]
+
+[tool.ruff.lint]
+# Pyflakes plus the pycodestyle error classes that catch real bugs and the
+# bugbear checks; no import sorting or style rules, which would only churn.
+select = ["E4", "E7", "E9", "F", "B"]
+# zip() over deliberately offset slices (seen[1:] vs rebalances) is idiomatic here.
+ignore = ["B905"]

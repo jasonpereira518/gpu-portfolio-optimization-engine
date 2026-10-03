@@ -10,8 +10,9 @@
 # reports the highest CUDA version the driver supports). On an older driver,
 # swap every `-cu13` / `cuda13x` below for `-cu12` / `cuda12x`.
 #
-# Status: pinned to the current release, not yet verified on a GPU — see
-# docs/setup-wsl2.md for the bring-up sequence that verifies it.
+# Status: verified on an RTX 4060 Laptop GPU under WSL2 (driver 592.82,
+# Python 3.12.3, cuDF 26.08.01 / cuML 26.08.00 / cuOpt 26.08.00); see
+# docs/setup-wsl2.md for the bring-up sequence and the committed results.
 cudf-cu13==26.8.*
 cuml-cu13==26.8.*
 cuopt-cu13==26.8.*

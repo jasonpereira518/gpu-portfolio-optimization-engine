@@ -3,7 +3,9 @@
 cuOpt's Python layer was reorganized between the 25.12, 26.02 and 26.04/26.06
 releases (LP/QP/MILP was split into "Convex Optimization" and "MIP" sections,
 and enum locations moved). Rather than scatter try/except across the optimizer,
-every version-sensitive lookup is isolated here and asserted once at import.
+every version-sensitive lookup is isolated here and resolved once, on the first
+``load_cuopt()`` call (nothing is imported at module import, so a CPU-only host
+can import this module freely).
 
 API surface targeted (the 26.02–26.08 references; model-building semantics
 that matter are documented in ``optimizer/mean_variance_cuopt.py``):
@@ -112,10 +114,12 @@ def cuopt_available() -> bool:
 
 
 def status_name(prob) -> str:
-    """cuOpt reports Status as an int in current releases, an enum in others.
+    """The solve's termination status as a name, e.g. "Optimal" or "FeasibleFound".
 
-    (The commonly-circulated `prob.Status.name` snippet raises AttributeError
-    on 26.02, where Status is a plain int.)
+    After a solve, cuOpt's ``Status`` is an ``IntEnum`` with a ``.name``; only
+    the placeholder before a solve is a bare int. The int fallback below is for
+    that placeholder and for releases that return a plain int (see the
+    correction in docs/case-study.md).
     """
     status = prob.Status
     if hasattr(status, "name"):

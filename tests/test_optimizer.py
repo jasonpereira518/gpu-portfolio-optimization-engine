@@ -67,8 +67,10 @@ def test_two_asset_min_variance_matches_hand_derivation():
     np.testing.assert_allclose(solution.weights, expected, atol=1e-6)
 
 
-@pytest.mark.parametrize("rho", [-0.5, 0.0, 0.3, 0.8])
-def test_min_variance_matches_closed_form(model, rho):
+@pytest.mark.parametrize("seed", [1, 2, 3, 4])
+def test_min_variance_matches_closed_form(seed):
+    """Four different return histories, so four different covariance matrices."""
+    model = build_risk_model(synthetic_prices(30, n_days=1200, seed=seed).prices, estimator="ledoit_wolf")
     cov = model.nearest_psd()
     spec = PortfolioSpec(risk_aversion=0.0, max_weight=1.0, min_weight=-1.0)
     solution = solve_mean_variance_cpu(model, spec)

@@ -111,6 +111,12 @@ def main() -> int:
     for result in results:
         print()
         print(result.render())
+        if result.failed_rebalances:
+            log.warning(
+                "%s held its previous weights through %d failed rebalance(s) (first: %s); "
+                "its numbers are not comparable with a run that solved every date",
+                result.label, len(result.failed_rebalances), result.failed_rebalances[0][0].date(),
+            )
 
     table = compare_results(results)
     print("\n" + table.to_string(float_format=lambda v: f"{v:.4f}"))

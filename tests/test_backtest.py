@@ -252,6 +252,44 @@ def test_failed_solve_holds_previous_weights(prices):
     assert calls["n"] > 2
     assert len(result.rebalances) == calls["n"] - 1  # one solve failed, rest recorded
     assert result.equity.iloc[-1] > 0
+    # The skipped rebalance is on the record, not only in the log, so a CPU/GPU
+    # comparison can tell that one side held its weights through a failure.
+    assert len(result.failed_rebalances) == 1
+    date, reason = result.failed_rebalances[0]
+    assert "simulated solver failure" in reason
+    assert date not in [r.date for r in result.rebalances]
+
+
+def test_turnover_budget_is_carried_from_the_previous_rebalance(prices):
+    """With apply_turnover_budget, each solve is capped against the weights actually held.
+
+    The first rebalance cannot be: going from all-cash to invested is 100%
+    turnover by definition, so a budget below that would fail every solve and
+    leave nothing to score.
+    """
+    budget = 0.30
+    spec = PortfolioSpec(risk_aversion=5.0, max_weight=0.20, turnover_budget=budget,
+                         w_prev=np.full(prices.shape[1], 1.0 / prices.shape[1]))
+    seen: list[PortfolioSpec] = []
+
+    def spying_solver(model, spec_now):
+        seen.append(spec_now)
+        return solve_mean_variance_cpu(model, spec_now)
+
+    result = run_backtest(prices, RISK_FN, spying_solver, spec, frequency="QE",
+                          lookback_days=500, apply_turnover_budget=True)
+
+    assert result.failed_rebalances == []
+    assert len(seen) == len(result.rebalances) > 2
+    assert seen[0].turnover_budget is None
+    for spec_now, previous, record in zip(seen[1:], result.rebalances, result.rebalances[1:]):
+        assert spec_now.turnover_budget == budget
+        assert spec_now.risk_aversion == spec.risk_aversion and spec_now.max_weight == spec.max_weight
+        # The cap is measured from what was held going into the rebalance: the
+        # previous target after a quarter of drift, not the previous target.
+        assert spec_now.w_prev.sum() == pytest.approx(1.0)
+        assert record.turnover <= budget + 1e-5
+        assert not np.allclose(spec_now.w_prev, previous.weights)
 
 
 def test_summary_statistics_are_self_consistent(prices):
