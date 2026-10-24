@@ -1,5 +1,28 @@
 # GPU Portfolio & Risk Decision Engine
 
+## Executive summary
+
+Mean-variance portfolio optimization built on CPU and GPU, with parity checked
+before any timing is trusted. Measured on one RTX 4060 Laptop GPU (WSL2):
+
+- **The GPU wins only the QP solve, and only at scale.** cuOpt solves 2.48–2.66×
+  faster than CVXPY + Clarabel at 3,000 assets, and loses at 50 (0.05–0.09×) and
+  500 (0.52–0.59×). Feature engineering and covariance estimation are slower on
+  the GPU at every size tested (0.01–0.37×), so end to end the CPU still wins
+  here.
+- **Correctness comes first.** The CPU path is the oracle; CPU/GPU objectives
+  agree to 1e-6, and analytic checks have no solver on the reference side.
+- **Lot rounding:** under the default cash-band budget the cuOpt MIP beats the
+  greedy rounder in 18 of 18 cases, but by under 1% in 13 of them.
+- **NIM explainer (stretch):** 3 of 5 hosted calls answered, and 2 of those 3
+  replies did arithmetic they were told not to, and got it wrong.
+- **Backtest caveat:** on real data the optimizer and equal-weight are level on
+  Sharpe (0.93 vs 0.90).
+
+Details, tables and limitations follow.
+
+---
+
 Mean-variance portfolio optimization built twice — once on CPU (pandas + CVXPY)
 and once on GPU (RAPIDS cuDF/cuML + NVIDIA cuOpt) — with a benchmark harness
 that measures where the GPU actually wins, and a validation suite that proves
