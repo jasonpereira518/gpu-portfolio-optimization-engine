@@ -64,6 +64,24 @@ def _row(case: dict, method: str, solver: str, solution: LotSolution, target: np
     }
 
 
+def stage1_targets(sizes: list[int], turnover_budgets: list[float | None], n_days: int = 1260,
+                   seed: int = 3):
+    """Yield (n, turnover cap, target weights, last prices, covariance, previous weights).
+
+    Stage 1 runs on CVXPY, so every host rounds the same targets.
+    """
+    for n in sizes:
+        prices = synthetic_prices(n, n_days=n_days, seed=seed).prices
+        model = build_risk_model(prices, estimator="ledoit_wolf")
+        cov, last = model.nearest_psd(), prices.iloc[-1].to_numpy()
+        w_prev = np.full(n, 1.0 / n)
+        for budget in turnover_budgets:
+            # Same position cap as the benchmark sweep: 4x equal weight.
+            spec = PortfolioSpec(risk_aversion=1.0, max_weight=min(1.0, 4.0 / n),
+                                 turnover_budget=budget, w_prev=w_prev if budget is not None else None)
+            yield n, budget, solve_mean_variance_cpu(model, spec).weights, last, cov, w_prev
+
+
 def run_lot_rounding(
     sizes: list[int],
     lot_sizes: list[int],
@@ -81,34 +99,25 @@ def run_lot_rounding(
     with_mip = api is not None or cuopt_available()
     solver = f"cuopt-{(api or load_cuopt()).version}" if with_mip else None
     rows = []
-    for n in sizes:
-        prices = synthetic_prices(n, n_days=n_days, seed=seed).prices
-        model = build_risk_model(prices, estimator="ledoit_wolf")
-        cov, last = model.nearest_psd(), prices.iloc[-1].to_numpy()
-        w_prev = np.full(n, 1.0 / n)
-        for budget in turnover_budgets:
-            # Same position cap as the benchmark sweep: 4x equal weight.
-            spec = PortfolioSpec(risk_aversion=1.0, max_weight=min(1.0, 4.0 / n),
-                                 turnover_budget=budget, w_prev=w_prev if budget is not None else None)
-            target = solve_mean_variance_cpu(model, spec).weights
-            for lot_size in lot_sizes:
-                case = {"n_assets": n, "turnover_budget": budget, "lot_size": lot_size,
-                        "portfolio_value": portfolio_value}
-                greedy = round_lots_greedy(target, last, portfolio_value, lot_size=lot_size)
-                rows.append(_row(case, "greedy", "numpy", greedy, target, w_prev, cov))
-                if not with_mip:
+    for n, budget, target, last, cov, w_prev in stage1_targets(sizes, turnover_budgets, n_days, seed):
+        for lot_size in lot_sizes:
+            case = {"n_assets": n, "turnover_budget": budget, "lot_size": lot_size,
+                    "portfolio_value": portfolio_value}
+            greedy = round_lots_greedy(target, last, portfolio_value, lot_size=lot_size)
+            rows.append(_row(case, "greedy", "numpy", greedy, target, w_prev, cov))
+            if not with_mip:
+                continue
+            for method, max_cash in MIP_BUDGETS.items():
+                try:
+                    solution = solve_lot_rounding_cuopt(
+                        target, last, portfolio_value, lot_size=lot_size, max_cash=max_cash,
+                        time_limit=time_limit, api=api,
+                    )
+                except RuntimeError as exc:  # no incumbent: recorded, not skipped
+                    rows.append({**case, "method": method, "max_cash": max_cash, "status": str(exc)})
                     continue
-                for method, max_cash in MIP_BUDGETS.items():
-                    try:
-                        solution = solve_lot_rounding_cuopt(
-                            target, last, portfolio_value, lot_size=lot_size, max_cash=max_cash,
-                            time_limit=time_limit, api=api,
-                        )
-                    except RuntimeError as exc:  # no incumbent: recorded, not skipped
-                        rows.append({**case, "method": method, "max_cash": max_cash, "status": str(exc)})
-                        continue
-                    rows.append({**_row(case, method, solver, solution, target, w_prev, cov),
-                                 "max_cash": max_cash})
+                rows.append({**_row(case, method, solver, solution, target, w_prev, cov),
+                             "max_cash": max_cash})
     return pd.DataFrame(rows)
 
 
